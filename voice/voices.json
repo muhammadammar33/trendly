@@ -1,0 +1,38 @@
+{
+  "voices": [
+    {
+      "id": "female",
+      "name": "Amy (Female, US)",
+      "language": "en-US",
+      "gender": "female",
+      "description": "Natural American female voice - Neural TTS"
+    },
+    {
+      "id": "male",
+      "name": "Ryan (Male, US)",
+      "language": "en-US",
+      "gender": "male",
+      "description": "Natural American male voice - Neural TTS"
+    },
+    {
+      "id": "british-female",
+      "name": "Alba (Female, UK)",
+      "language": "en-GB",
+      "gender": "female",
+      "description": "Natural British female voice - Neural TTS"
+    },
+    {
+      "id": "british-male",
+      "name": "Northern (Male, UK)",
+      "language": "en-GB",
+      "gender": "male",
+      "description": "Natural British male voice - Neural TTS"
+    }
+  ],
+  "speeds": [
+    { "value": 0.8, "label": "Slow" },
+    { "value": 1.0, "label": "Normal" },
+    { "value": 1.2, "label": "Fast" },
+    { "value": 1.4, "label": "Very Fast" }
+  ]
+}

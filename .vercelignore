@@ -1,0 +1,18 @@
+# Local development files
+*.log
+.DS_Store
+.env*.local
+
+# Build outputs that Vercel rebuilds
+.next/
+out/
+node_modules/
+
+# Local storage (not needed on Vercel)
+public/uploads/
+public/temp/
+public/videos/
+public/audio/
+
+# Playwright browsers (too large for Vercel)
+.cache/ms-playwright/

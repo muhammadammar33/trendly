@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build",
+  "functions": {
+    "app/api/**/*.ts": {
+      "maxDuration": 60,
+      "memory": 3008
+    }
+  },
+  "env": {
+    "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1"
+  }
+}

@@ -5,18 +5,32 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "lint": "next lint",
+    "playwright:install": "playwright install chromium",
+    "vercel-build": "next build",
+    "postinstall": "echo 'Skipping Playwright browser download on Vercel'"
   },
   "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
+    "lru-cache": "^10.1.0",
+    "lucide-react": "^0.562.0",
     "next": "16.1.1",
+    "playwright": "^1.41.0",
+    "qrcode": "^1.5.4",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "sharp": "^0.34.5",
+    "undici": "^6.6.0",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/uuid": "^9.0.8",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
