@@ -65,7 +65,13 @@ async function processRenderAsync(
   type: 'preview' | 'final'
 ): Promise<void> {
   const resolution = type === 'preview' ? '720p' : '1080p';
-  const outputDir = path.join(process.cwd(), 'public', 'studio', 'videos');
+  
+  // Use /data for Railway persistent volume, fall back to public for local dev
+  const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
+  const outputDir = isRailway 
+    ? path.join('/data', 'studio', 'videos')
+    : path.join(process.cwd(), 'public', 'studio', 'videos');
+  
   const fileName = `${project.projectId}_${type}.mp4`;
   const outputPath = path.join(outputDir, fileName);
 

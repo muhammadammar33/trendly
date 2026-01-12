@@ -25,7 +25,10 @@ export async function downloadImages(
   imageUrls: string[],
   jobId: string
 ): Promise<DownloadResult> {
-  const downloadDir = path.join(process.cwd(), 'tmp', 'slideshows', jobId, 'images');
+  const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+  const downloadDir = isServerless
+    ? path.join('/tmp', 'slideshows', jobId, 'images')
+    : path.join(process.cwd(), 'tmp', 'slideshows', jobId, 'images');
   
   // Create directory
   await fs.mkdir(downloadDir, { recursive: true });

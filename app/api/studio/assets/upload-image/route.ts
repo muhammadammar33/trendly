@@ -35,8 +35,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create upload directory
-    const uploadDir = path.join(process.cwd(), 'public', 'studio', 'images');
+    // Create upload directory (use /data for Railway persistent volume, public for local dev)
+    const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
+    const uploadDir = isRailway
+      ? path.join('/data', 'studio', 'images')
+      : path.join(process.cwd(), 'public', 'studio', 'images');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }

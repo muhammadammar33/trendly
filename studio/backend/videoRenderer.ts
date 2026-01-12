@@ -56,8 +56,8 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
       throw new Error(`Timeline validation failed: ${validation.errors.join(', ')}`);
     }
 
-    // Create working directory
-    const workDir = path.join(process.cwd(), 'tmp', 'studio', project.projectId);
+    // Create working directory (use /tmp for serverless compatibility)
+    const workDir = path.join('/tmp', 'studio', project.projectId);
     const imagesDir = path.join(workDir, 'images');
     const audioDir = path.join(workDir, 'audio');
 
@@ -162,22 +162,54 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
         return;
       }
 
-      // Check if file already exists (e.g., uploaded files)
-      if (slide.imageUrl.startsWith('/studio/images/')) {
-        // This is an uploaded file, copy it instead of downloading
+      // Check if file is a local upload (starts with / indicating public folder)
+      if (slide.imageUrl.startsWith('/')) {
+        // This is an uploaded file in public folder, copy it instead of downloading
         const publicPath = path.join(process.cwd(), 'public', slide.imageUrl);
         if (fs.existsSync(publicPath)) {
           fs.copyFileSync(publicPath, filePath);
           console.log(`[VideoRenderer] Copied uploaded slide ${index}: ${slide.imageUrl}`);
           return;
+        } else {
+          console.warn(`[VideoRenderer] Local file not found: ${publicPath}`);
         }
       }
       
+      // Check for file:// protocol (uploaded files)
+      if (slide.imageUrl.startsWith('file://')) {
+        const localPath = slide.imageUrl.replace('file://', '');
+        if (fs.existsSync(localPath)) {
+          fs.copyFileSync(localPath, filePath);
+          console.log(`[VideoRenderer] Copied file:// slide ${index}: ${localPath}`);
+          return;
+        }
+      }
+      
+      // Download external URL (scraped images)
+      console.log(`[VideoRenderer] Downloading slide ${index} from: ${slide.imageUrl}`);
       await downloadFile(slide.imageUrl, filePath);
       console.log(`[VideoRenderer] Downloaded slide ${index}: ${slide.imageUrl}`);
+      
+      // Verify the downloaded file exists and has content
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Downloaded file does not exist: ${filePath}`);
+      }
+      const stats = fs.statSync(filePath);
+      if (stats.size === 0) {
+        throw new Error(`Downloaded file is empty: ${filePath}`);
+      }
+      console.log(`[VideoRenderer] Verified slide ${index}: ${stats.size} bytes`);
+      
     } catch (err) {
-      console.error(`[VideoRenderer] Failed to download slide ${index}:`, err);
-      throw new Error(`Failed to download image: ${slide.imageUrl}`);
+      console.error(`[VideoRenderer] Failed to process slide ${index} (${slide.imageUrl}):`, err);
+      // Create a fallback placeholder image instead of failing
+      try {
+        await createBlankImage(filePath, 1920, 1080, '#333333');
+        console.warn(`[VideoRenderer] Created placeholder for failed slide ${index}`);
+      } catch (fallbackErr) {
+        console.error(`[VideoRenderer] Failed to create placeholder for slide ${index}:`, fallbackErr);
+        throw new Error(`Failed to download image and create placeholder: ${slide.imageUrl}`);
+      }
     }
   });
 
@@ -375,7 +407,7 @@ async function renderWithFFmpeg(
     );
   });
 
-  // Concat all slides
+  // Concat all slides (simple concatenation for now)
   const slideLabels = allSlides.map((_, i) => `[v${i}]`).join('');
   filterParts.push(`${slideLabels}concat=n=${allSlides.length}:v=1:a=0[vconcat]`);
 

@@ -34,8 +34,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create upload directory
-    const uploadDir = path.join(process.cwd(), 'public', 'studio', 'music');
+    // Create upload directory (use /tmp for serverless, public for local dev)
+    const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
+    const uploadDir = isRailway
+      ? path.join('/data', 'studio', 'music')
+      : path.join(process.cwd(), 'public', 'studio', 'music');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }

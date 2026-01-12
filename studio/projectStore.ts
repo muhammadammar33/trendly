@@ -97,6 +97,9 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
     console.warn(`[ProjectStore] WARNING: Only found ${selectedImages.length} valid images, expected 4`);
   }
 
+  // Initialize slides array
+  let slides: Slide[] = [];
+
   // If we don't have enough images, throw error with helpful message
   if (selectedImages.length === 0) {
     // Fallback: try with lower threshold (0.5) if we got 0 with 0.7
@@ -107,27 +110,26 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
     if (fallbackImages.length > 0) {
       console.warn(`[ProjectStore] Using fallback images with score >= 0.5 (found ${fallbackImages.length})`);
       const fallbackSelected = fallbackImages.slice(0, 4);
-      const fallbackSlides = fallbackSelected.map((img, index) => ({
+      slides = fallbackSelected.map((img, index) => ({
         id: uuidv4(),
         imageUrl: img.url,
         startTime: index * defaultSlideDuration,
         endTime: (index + 1) * defaultSlideDuration,
         transition: 'fade' as const,
       }));
-      slides.push(...fallbackSlides);
     } else {
       throw new Error('No valid images found in scraped data. The website may not have accessible images or they may be blocked by CORS. Try a different website.');
     }
+  } else {
+    // Generate slides with even timing
+    slides = selectedImages.map((img, index) => ({
+      id: uuidv4(),
+      imageUrl: img.url,
+      startTime: index * defaultSlideDuration,
+      endTime: (index + 1) * defaultSlideDuration,
+      transition: 'fade',
+    }));
   }
-
-  // Generate slides with even timing
-  const slides: Slide[] = selectedImages.map((img, index) => ({
-    id: uuidv4(),
-    imageUrl: img.url,
-    startTime: index * defaultSlideDuration,
-    endTime: (index + 1) * defaultSlideDuration,
-    transition: 'fade',
-  }));
 
   // Calculate total duration based on slides (end screen is optional)
   const baseDuration = slides.length * defaultSlideDuration;
