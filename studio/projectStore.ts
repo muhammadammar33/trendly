@@ -10,13 +10,85 @@ import { ScrapeResult } from '@/lib/types';
 import { generateVoiceoverScript } from './backend/scriptGenerator';
 import { selectBest4ImagesFor16x9 } from './backend/imageSelector';
 import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * File-based persistence configuration
+ */
+const PERSISTENCE_DIR = path.join(process.cwd(), 'tmp', 'store');
+const PROJECTS_FILE = path.join(PERSISTENCE_DIR, 'projects.json');
+
+/**
+ * Ensure persistence directory exists
+ */
+function ensurePersistenceDir() {
+  if (!fs.existsSync(PERSISTENCE_DIR)) {
+    fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
+    console.log('[ProjectStore] Created persistence directory:', PERSISTENCE_DIR);
+  }
+}
+
+/**
+ * Load projects from disk
+ */
+function loadProjectsFromDisk(): Map<string, Project> {
+  ensurePersistenceDir();
+  
+  if (!fs.existsSync(PROJECTS_FILE)) {
+    console.log('[ProjectStore] No persisted projects found, starting fresh');
+    return new Map<string, Project>();
+  }
+
+  try {
+    const data = fs.readFileSync(PROJECTS_FILE, 'utf-8');
+    const projectsArray = JSON.parse(data);
+    
+    const projectsMap = new Map<string, Project>();
+    for (const [id, project] of projectsArray) {
+      // Restore Date objects
+      project.createdAt = new Date(project.createdAt);
+      project.updatedAt = new Date(project.updatedAt);
+      if (project.lastPreviewRenderedAt) {
+        project.lastPreviewRenderedAt = new Date(project.lastPreviewRenderedAt);
+      }
+      projectsMap.set(id, project);
+    }
+    
+    console.log(`[ProjectStore] Loaded ${projectsMap.size} projects from disk`);
+    return projectsMap;
+  } catch (error) {
+    console.error('[ProjectStore] Error loading projects from disk:', error);
+    return new Map<string, Project>();
+  }
+}
+
+/**
+ * Save projects to disk
+ */
+function saveProjectsToDisk() {
+  try {
+    ensurePersistenceDir();
+    const projectsArray = Array.from(projects.entries());
+    fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projectsArray, null, 2), 'utf-8');
+    console.log(`[ProjectStore] Saved ${projects.size} projects to disk`);
+  } catch (error) {
+    console.error('[ProjectStore] Error saving projects to disk:', error);
+  }
+}
 
 /**
  * Global singleton store for projects (fixes Next.js module isolation)
  */
 const globalForProjects = globalThis as unknown as {
   projectsStore: Map<string, Project> | undefined;
+  projectsLoaded: boolean | undefined;
 };
+
+// Load from disk on first access
+if (!globalForProjects.projectsLoaded) {
+  globalForProjects.projectsStore = loadProjectsFromDisk();
+  globalForProjects.projectsLoaded = true;
+}
 
 const projects = globalForProjects.projectsStore ?? new Map<string, Project>();
 
@@ -31,11 +103,17 @@ setInterval(() => {
   const now = Date.now();
   const maxAge = 24 * 60 * 60 * 1000; // 24 hours
 
+  let cleaned = 0;
   for (const [id, project] of projects.entries()) {
     if (now - project.createdAt.getTime() > maxAge) {
       projects.delete(id);
+      cleaned++;
       console.log(`[ProjectStore] Cleaned up old project: ${id}`);
     }
+  }
+  
+  if (cleaned > 0) {
+    saveProjectsToDisk();
   }
 }, 60 * 60 * 1000); // Run every hour
 
@@ -216,6 +294,7 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
   };
 
   projects.set(projectId, project);
+  saveProjectsToDisk();
 
   console.log(`[ProjectStore] Created project ${projectId} with ${slides.length} slides (${slides.length - 1} content + 1 end screen)`);
 
@@ -250,6 +329,7 @@ export function updateProject(
   };
 
   projects.set(projectId, updated);
+  saveProjectsToDisk();
 
   console.log(`[ProjectStore] Updated project ${projectId}`);
 
@@ -262,6 +342,7 @@ export function updateProject(
 export function deleteProject(projectId: string): boolean {
   const deleted = projects.delete(projectId);
   if (deleted) {
+    saveProjectsToDisk();
     console.log(`[ProjectStore] Deleted project ${projectId}`);
   }
   return deleted;
