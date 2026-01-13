@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { url } = body;
+    const { url, enableCrawling, crawlOptions } = body;
 
     if (!url || typeof url !== 'string') {
       return NextResponse.json(
@@ -60,8 +60,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check cache
-    const cacheKey = url.trim().toLowerCase();
+    // Check cache (include crawling option in cache key)
+    const cacheKey = `${url.trim().toLowerCase()}:${enableCrawling ? 'crawl' : 'single'}`;
     const cached = cache.get(cacheKey);
     
     if (cached) {
@@ -76,8 +76,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Scrape the website
-    console.log(`[Scrape API] Scraping ${url}...`);
-    const result = await scrapeWebsite(url);
+    const mode = enableCrawling ? 'multi-page crawl' : 'single page';
+    console.log(`[Scrape API] Scraping ${url} (${mode})...`);
+    
+    const result = await scrapeWebsite(url, {
+      enableCrawling: enableCrawling || false,
+      crawlOptions: crawlOptions || {},
+    });
 
     // Cache successful or partial results
     if (result.status === 'ok' || result.status === 'partial') {
@@ -111,7 +116,18 @@ export async function POST(request: NextRequest) {
 export async function GET() {
   return NextResponse.json({
     message: 'Web Scraper API',
-    usage: 'POST /api/scrape with JSON body: { "url": "https://example.com" }',
+    usage: 'POST /api/scrape with JSON body: { "url": "https://example.com", "enableCrawling": false }',
+    options: {
+      enableCrawling: 'Set to true to crawl all internal pages (default: false)',
+      crawlOptions: {
+        maxPages: 'Maximum pages to crawl (default: 30)',
+        maxDepth: 'Maximum crawl depth (default: 3)',
+        requestTimeout: 'Timeout per request in ms (default: 10000)',
+        concurrency: 'Parallel page fetches (default: 3)',
+        includeSubdomains: 'Include subdomains (default: false)',
+        totalCrawlTimeout: 'Total crawl timeout in ms (default: 30000)',
+      },
+    },
     cache: {
       size: cache.size,
       maxSize: cache.max,

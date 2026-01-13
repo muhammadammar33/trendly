@@ -12,6 +12,15 @@ export interface ScrapeResult {
   images: ImageInfo[];
   debug: DebugInfo;
   error?: string;
+  crawlStats?: CrawlStats; // Multi-page crawl statistics
+}
+
+export interface CrawlStats {
+  pagesVisited: number;
+  pagesSkipped: number;
+  pagesFailed?: number;
+  imagesFound: number;
+  crawlTimeMs?: number;
 }
 
 export interface BusinessInfo {
@@ -35,6 +44,7 @@ export interface SocialLinks {
 }
 
 export interface BrandInfo {
+  name: string;
   favicon: string;
   logoCandidates: string[];
   brandColors: BrandColor[];
@@ -50,6 +60,8 @@ export interface ImageInfo {
   typeGuess: 'logo' | 'hero' | 'product' | 'banner' | 'icon' | 'other';
   score: number;
   source: 'img' | 'og' | 'css' | 'icon' | 'srcset' | 'twitter';
+  sourcePages?: string[]; // Pages where this image was found
+  sourceTypes?: string[]; // Different source types across pages
 }
 
 export interface DebugInfo {

@@ -47,10 +47,7 @@ export async function renderSlideshow(options: RenderOptions): Promise<RenderRes
     };
   }
 
-  const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
-  const outputDir = isServerless
-    ? path.join('/tmp', 'slideshows')
-    : path.join(process.cwd(), 'public', 'slideshows');
+  const outputDir = path.join(process.cwd(), 'public', 'slideshows');
   await fs.mkdir(outputDir, { recursive: true });
 
   const outputPath = path.join(outputDir, `${jobId}.mp4`);

@@ -9,6 +9,7 @@ export interface ImageCandidate {
   typeGuess: 'logo' | 'hero' | 'product' | 'banner' | 'icon' | 'other';
   score: number;
   source: 'img' | 'og' | 'css' | 'icon' | 'srcset' | 'twitter';
+  sourcePage?: string; // Page where this image was found
 }
 
 /**
@@ -18,7 +19,8 @@ export function scoreImage(
   url: string,
   source: ImageCandidate['source'],
   alt: string = '',
-  context: string = ''
+  context: string = '',
+  sourcePage?: string
 ): ImageCandidate {
   let score = 0.6; // Higher base score for better quality images
   let typeGuess: ImageCandidate['typeGuess'] = 'other';
@@ -146,6 +148,7 @@ export function scoreImage(
     typeGuess,
     score: Math.round(score * 100) / 100,
     source,
+    sourcePage,
   };
 }
 
@@ -272,3 +275,85 @@ export function sortImagesByScore(images: ImageCandidate[]): ImageCandidate[] {
     return typePriority[b.typeGuess] - typePriority[a.typeGuess];
   });
 }
+
+/**
+ * Aggregate images from multiple pages, tracking which pages they appear on
+ */
+export function aggregateImagesFromPages(
+  pagesImages: ImageCandidate[][],
+  pageUrls: string[],
+  homepageUrl: string
+): ImageCandidate[] {
+  const imageMap = new Map<string, {
+    candidate: ImageCandidate;
+    pages: Set<string>;
+    sources: Set<string>;
+    totalScore: number;
+    occurrences: number;
+  }>();
+
+  // Aggregate all images
+  for (let i = 0; i < pagesImages.length; i++) {
+    const images = pagesImages[i];
+    const pageUrl = pageUrls[i];
+
+    for (const img of images) {
+      // Normalize URL for deduplication
+      const normalized = img.url.split('?')[0].split('#')[0];
+
+      if (!imageMap.has(normalized)) {
+        imageMap.set(normalized, {
+          candidate: { ...img },
+          pages: new Set([pageUrl]),
+          sources: new Set([img.source]),
+          totalScore: img.score,
+          occurrences: 1,
+        });
+      } else {
+        const existing = imageMap.get(normalized)!;
+        existing.pages.add(pageUrl);
+        existing.sources.add(img.source);
+        existing.totalScore += img.score;
+        existing.occurrences++;
+
+        // Update type guess if we found a better one
+        if (img.score > existing.candidate.score) {
+          existing.candidate.typeGuess = img.typeGuess;
+        }
+      }
+    }
+  }
+
+  // Convert map to array and boost scores for images found on multiple pages
+  const aggregated: ImageCandidate[] = [];
+
+  for (const [url, data] of imageMap.entries()) {
+    let finalScore = data.totalScore / data.occurrences; // Average score
+
+    // Boost if found on multiple pages
+    if (data.occurrences > 1) {
+      finalScore += 0.1 * Math.min(data.occurrences - 1, 5); // Up to +0.5 bonus
+    }
+
+    // Boost if found on homepage
+    if (data.pages.has(homepageUrl)) {
+      finalScore += 0.15;
+    }
+
+    // Cap at 1.0
+    finalScore = Math.min(1, finalScore);
+    finalScore = Math.round(finalScore * 100) / 100;
+
+    aggregated.push({
+      url: data.candidate.url,
+      typeGuess: data.candidate.typeGuess,
+      score: finalScore,
+      source: data.candidate.source,
+      sourcePage: data.pages.size === 1 ? (Array.from(data.pages)[0] as string) : undefined,
+    });
+  }
+
+  console.log(`[AggregateImages] Aggregated ${aggregated.length} unique images from ${pagesImages.length} pages`);
+  return aggregated;
+}
+

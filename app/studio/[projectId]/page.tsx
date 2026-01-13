@@ -37,6 +37,7 @@ export default function StudioPage() {
   const [currentRenderJobId, setCurrentRenderJobId] = useState<string | null>(
     null
   );
+  const [autoPreviewTriggered, setAutoPreviewTriggered] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -44,6 +45,71 @@ export default function StudioPage() {
   useEffect(() => {
     loadProject();
   }, [projectId]);
+
+  // Auto-generate preview on first mount
+  useEffect(() => {
+    if (!project || autoPreviewTriggered || renderLoading) return;
+
+    // Check if preview needs to be generated
+    const needsPreview = shouldGeneratePreview(project);
+    
+    if (needsPreview) {
+      console.log('[Studio] Auto-generating preview video...');
+      setAutoPreviewTriggered(true);
+      handleRenderPreview();
+    } else {
+      console.log('[Studio] Preview already exists and config unchanged');
+    }
+  }, [project, autoPreviewTriggered, renderLoading]);
+
+  /**
+   * Determine if preview needs to be generated
+   */
+  const shouldGeneratePreview = (proj: Project): boolean => {
+    // No preview exists yet
+    if (!proj.previewVideoUrl) {
+      return true;
+    }
+
+    // Check if config has changed since last preview
+    if (proj.lastPreviewConfigHash) {
+      const currentHash = generateConfigHash(proj);
+      if (currentHash !== proj.lastPreviewConfigHash) {
+        console.log('[Studio] Config changed, re-generating preview');
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  /**
+   * Generate config hash for change detection
+   */
+  const generateConfigHash = (proj: Project): string => {
+    const hashData = {
+      slides: proj.slides.map(s => ({
+        url: s.imageUrl,
+        start: s.startTime,
+        end: s.endTime,
+      })),
+      banner: proj.bottomBanner.enabled ? {
+        text: proj.bottomBanner.text,
+      } : null,
+      qr: proj.qrCode.enabled ? {
+        url: proj.qrCode.url,
+      } : null,
+      music: proj.music.enabled ? {
+        file: proj.music.fileName,
+      } : null,
+      voice: proj.voice.enabled ? {
+        script: proj.voice.script,
+      } : null,
+    };
+
+    const json = JSON.stringify(hashData);
+    return Buffer.from(json).toString('base64').substring(0, 32);
+  };
 
   // Poll render status
   useEffect(() => {
@@ -896,11 +962,17 @@ function RightPanel({
             {project.slides.map((slide, index) => (
               <div key={slide.id} className="bg-gray-700 rounded p-3">
                 <div className="flex items-center gap-2 mb-2">
-                  <img
-                    src={slide.imageUrl}
-                    alt={`Slide ${index + 1}`}
-                    className="w-16 h-16 object-cover rounded"
-                  />
+                  {slide.imageUrl ? (
+                    <img
+                      src={slide.imageUrl}
+                      alt={`Slide ${index + 1}`}
+                      className="w-16 h-16 object-cover rounded"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 bg-gradient-to-br from-indigo-900 to-purple-900 rounded flex items-center justify-center">
+                      <span className="text-white text-xs font-bold">END</span>
+                    </div>
+                  )}
                   <div className="flex-1">
                     <div className="font-bold">Slide {index + 1}</div>
                     <div className="text-xs text-gray-400">

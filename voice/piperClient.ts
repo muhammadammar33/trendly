@@ -23,11 +23,7 @@ export interface PiperResult {
 
 const PIPER_EXECUTABLE = process.env.PIPER_PATH || 'C:\\piper\\piper.exe';
 const VOICES_DIR = process.env.PIPER_VOICES_DIR || 'C:\\piper\\voices';
-// Use /tmp for serverless, public for local dev
-const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
-const CACHE_DIR = isServerless 
-  ? '/tmp/voice' 
-  : path.join(process.cwd(), 'public', 'voice');
+const CACHE_DIR = path.join(process.cwd(), 'public', 'voice');
 
 /**
  * Voice model mapping

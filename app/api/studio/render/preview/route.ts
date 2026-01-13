@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject, updateProject } from '@/studio/projectStore';
 import { createRenderJob, updateRenderJob } from '@/studio/backend/renderJobStore';
 import { renderVideo } from '@/studio/backend/videoRenderer';
+import { generateConfigHash } from '@/studio/backend/imageSelector';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -74,20 +75,20 @@ async function processRenderAsync(
   type: 'preview' | 'final'
 ): Promise<void> {
   const resolution = type === 'preview' ? '720p' : '1080p';
-  
-  // Use /data for Railway persistent volume, fall back to public for local dev
-  const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
-  const outputDir = isRailway 
-    ? path.join('/data', 'studio', 'videos')
-    : path.join(process.cwd(), 'public', 'studio', 'videos');
-  
+  const outputDir = path.join(process.cwd(), 'public', 'studio', 'videos');
   const fileName = `${project.projectId}_${type}.mp4`;
   const outputPath = path.join(outputDir, fileName);
 
   fs.mkdirSync(outputDir, { recursive: true });
 
+  console.log(`[API] ===== Starting ${type} render =====`);
+  console.log(`[API] Project ID: ${project.projectId}`);
+  console.log(`[API] Job ID: ${jobId}`);
+  console.log(`[API] Output: ${outputPath}`);
+
   try {
     // Update status
+    console.log('[API] Setting job status to preparing...');
     updateRenderJob(jobId, {
       status: 'preparing',
       progress: 5,
@@ -95,11 +96,13 @@ async function processRenderAsync(
     });
 
     // Render video
+    console.log('[API] Calling renderVideo()...');
     await renderVideo({
       project,
       outputPath,
       resolution,
       onProgress: (progress, stage) => {
+        console.log(`[API] Progress update: ${progress}% - ${stage}`);
         updateRenderJob(jobId, {
           status: 'rendering',
           progress,
@@ -108,17 +111,22 @@ async function processRenderAsync(
       },
     });
 
-    // Update project with video URL (use API endpoint for Railway, static for local)
-    const isRailway = !!process.env.RAILWAY_ENVIRONMENT;
-    const videoUrl = isRailway 
-      ? `/api/studio/video/${fileName}`
-      : `/studio/videos/${fileName}`;
+    console.log('[API] renderVideo() completed successfully!');
+
+    // Update project with config hash
+    const videoUrl = `/studio/videos/${fileName}`;
+    const configHash = generateConfigHash(project);
+    
+    console.log(`[API] Generated config hash for ${type}: ${configHash}`);
     
     if (type === 'preview') {
       updateProject(project.projectId, {
         status: 'preview-ready',
         previewVideoUrl: videoUrl,
+        lastPreviewConfigHash: configHash,
+        lastPreviewRenderedAt: new Date(),
       });
+      console.log(`[API] Updated project with preview hash: ${configHash}`);
     } else {
       updateProject(project.projectId, {
         status: 'final-ready',
@@ -136,11 +144,14 @@ async function processRenderAsync(
 
     console.log(`[API] ${type} render complete: ${videoUrl}`);
   } catch (error: any) {
-    console.error(`[API] ${type} render failed:`, error);
+    console.error(`[API] ===== ${type.toUpperCase()} RENDER FAILED =====`);
+    console.error('[API] Error message:', error?.message || 'Unknown error');
+    console.error('[API] Error stack:', error?.stack || 'No stack trace');
+    console.error('[API] Error details:', error);
     
     updateRenderJob(jobId, {
       status: 'error',
-      error: error.message,
+      error: error?.message || 'Unknown rendering error',
       stage: 'Failed',
     });
 

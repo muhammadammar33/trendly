@@ -2,7 +2,7 @@
  * Audio Mixer
  * 
  * Handles:
- * - Text-to-Speech generation using Speaktor API
+ * - Text-to-Speech generation using Gradium AI WebSocket API
  * - Background music
  * - Audio mixing
  */
@@ -10,114 +10,82 @@
 import { Music, Voice } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
-import https from 'https';
-import http from 'http';
+import { generateGradiumTTS, GRADIUM_VOICES } from './gradiumClient';
 
 /**
- * Generate TTS audio file using Speaktor API
+ * Gradium AI Voice Options (WebSocket-based)
+ */
+export { GRADIUM_VOICES } from './gradiumClient';
+
+/**
+ * Generate TTS audio file using Gradium AI WebSocket API
  * 
- * Documentation: https://speaktor.com/api-docs
+ * @param script - Text to convert to speech
+ * @param voice - Voice model (e.g., 'en-US-female', 'en-GB-male')
+ * @returns Path to generated audio file, or null if generation fails
  */
 export async function generateTTS(
-  voice: Voice,
-  outputPath: string
-): Promise<void> {
-  if (!voice.enabled || !voice.script.trim()) {
-    return;
+  script: string,
+  voice?: string
+): Promise<string | null> {
+  if (!script || !script.trim()) {
+    console.log('[AudioMixer] Empty script, skipping TTS');
+    return null;
   }
 
-  const apiKey = process.env.SPEAKTOR_API_KEY;
-  if (!apiKey) {
-    console.warn('[AudioMixer] SPEAKTOR_API_KEY not found in .env, skipping TTS');
-    return;
+  console.log('\n╔════════════════════════════════════════════════════════╗');
+  console.log('║  🎙️  TTS GENERATION - Starting Process                 ║');
+  console.log('╠════════════════════════════════════════════════════════╣');
+  console.log(`║  Script Length: ${script.length.toString().padEnd(38)} chars ║`);
+  console.log(`║  Voice: ${(voice || 'en-US-female').padEnd(45)} ║`);
+  console.log('╚════════════════════════════════════════════════════════╝\n');
+
+  const timestamp = Date.now();
+  const tempDir = path.join(process.cwd(), 'tmp');
+  
+  // Ensure tmp directory exists
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
   }
 
-  return new Promise((resolve, reject) => {
-    // Speaktor API parameters
-    const voiceId = voice.voice === 'male' ? 'en-US-GuyNeural' : 'en-US-JennyNeural';
-    const rate = voice.speed; // 0.5 to 2.0
+  try {
+    // Generate audio using Gradium AI WebSocket
+    const audioBuffer = await generateGradiumTTS(script, voice || 'en-US-female');
     
-    const postData = JSON.stringify({
-      text: voice.script,
-      voice: voiceId,
-      speed: rate,
-      output_format: 'wav',
-    });
+    if (!audioBuffer) {
+      throw new Error('Gradium AI returned null audio buffer');
+    }
 
-    // Note: Speaktor.com doesn't have a public API endpoint
-    // Using a mock endpoint that will fail gracefully
-    // TODO: Replace with actual Speaktor API endpoint or use alternative TTS service
-    const options = {
-      hostname: 'api.speaktor.com',
-      port: 443,
-      path: '/api/v1/text-to-speech',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-        'Content-Length': Buffer.byteLength(postData),
-      },
-      timeout: 30000,
-    };
+    // Save to file
+    const outputPath = path.join(tempDir, `voice_gradium_${timestamp}.wav`);
+    fs.writeFileSync(outputPath, audioBuffer);
+    
+    const fileSizeKB = (audioBuffer.length / 1024).toFixed(2);
 
-    console.log(`[AudioMixer] Generating TTS with Speaktor API (voice: ${voiceId}, rate: ${rate})`);
-    console.log(`[AudioMixer] Note: Speaktor API endpoint may not be publicly available. Video will render without voice if this fails.`);
+    console.log('╔════════════════════════════════════════════════════════╗');
+    console.log('║  ✅ TTS COMPLETE - Provider: GRADIUM AI                ║');
+    console.log('╠════════════════════════════════════════════════════════╣');
+    console.log(`║  File Size: ${fileSizeKB.padEnd(43)} KB ║`);
+    console.log(`║  Audio Path: ...${outputPath.substring(outputPath.length - 35)}`.padEnd(56) + '║');
+    console.log('╚════════════════════════════════════════════════════════╝\n');
 
-    const req = https.request(options, (res) => {
-      if (res.statusCode !== 200) {
-        console.error(`[AudioMixer] Speaktor API error: ${res.statusCode}`);
-        let errorData = '';
-        res.on('data', (chunk) => { errorData += chunk; });
-        res.on('end', () => {
-          console.error(`[AudioMixer] Error details: ${errorData}`);
-          resolve(); // Don't reject, continue without TTS
-        });
-        return;
-      }
+    return outputPath;
 
-      const fileStream = fs.createWriteStream(outputPath);
-      res.pipe(fileStream);
-
-      fileStream.on('finish', () => {
-        fileStream.close();
-        console.log(`[AudioMixer] TTS generated: ${outputPath}`);
-        resolve();
-      });
-
-      fileStream.on('error', (err) => {
-        console.error(`[AudioMixer] File write error: ${err.message}`);
-        try {
-          if (fs.existsSync(outputPath)) {
-            fs.unlinkSync(outputPath);
-          }
-        } catch (e) {
-          // Ignore cleanup errors
-        }
-        resolve(); // Don't reject, continue without TTS
-      });
-    });
-
-    req.on('error', (err) => {
-      console.error(`[AudioMixer] Speaktor API request failed: ${err.message}`);
-      console.log('[AudioMixer] This is expected if Speaktor API endpoint is not publicly available');
-      console.log('[AudioMixer] Video will render without voiceover. Consider using alternative TTS service.');
-      resolve(); // Don't reject, continue without TTS
-    });
-
-    req.setTimeout(30000, () => {
-      req.destroy();
-      console.error('[AudioMixer] Speaktor API request timeout');
-      resolve(); // Don't reject, continue without TTS
-    });
-
-    req.write(postData);
-    req.end();
-  });
+  } catch (error: any) {
+    console.log('\n╔════════════════════════════════════════════════════════╗');
+    console.log('║  ❌ TTS FAILED - Gradium AI Unavailable                ║');
+    console.log('╠════════════════════════════════════════════════════════╣');
+    console.log(`║  Error: ${error.message.substring(0, 48).padEnd(48)} ║`);
+    console.log('║  Video will render WITHOUT voiceover                  ║');
+    console.log('╚════════════════════════════════════════════════════════╝\n');
+    
+    return null;
+  }
 }
 
 /**
  * Build FFmpeg audio filter for mixing
- * Now supports Speaktor-generated voiceover with music ducking
+ * Supports voiceover with music ducking
  */
 export function buildAudioFilter(
   music: Music,
@@ -187,8 +155,9 @@ export function buildAudioFilter(
 }
 
 /**
- * Check if Speaktor API is available
+ * Check if Gradium AI TTS is available
  */
 export async function isTTSAvailable(): Promise<boolean> {
-  return !!process.env.SPEAKTOR_API_KEY;
+  // Check if Gradium AI API key is configured
+  return !!process.env.GRADIUM_API_KEY;
 }

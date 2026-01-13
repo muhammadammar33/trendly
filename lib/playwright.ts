@@ -11,24 +11,9 @@ let activeSessions = 0;
 const MAX_CONCURRENT = parseInt(process.env.MAX_PLAYWRIGHT_CONCURRENT || '2', 10);
 
 /**
- * Check if Playwright is available in the current environment
- */
-function isPlaywrightAvailable(): boolean {
-  // Disable Playwright on Vercel and other serverless environments
-  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    return false;
-  }
-  return true;
-}
-
-/**
  * Get or create a shared browser instance
  */
 async function getBrowser(): Promise<Browser> {
-  if (!isPlaywrightAvailable()) {
-    throw new Error('Playwright is not available in this environment');
-  }
-  
   if (!browserInstance || !browserInstance.isConnected()) {
     browserInstance = await chromium.launch({
       headless: true,
@@ -51,19 +36,6 @@ export async function scrapeWithPlaywright(
   url: string,
   inputUrl: string
 ): Promise<Partial<ScrapeResult>> {
-  // Check if Playwright is available
-  if (!isPlaywrightAvailable()) {
-    return {
-      status: 'error',
-      error: 'Playwright is not available in serverless environment',
-      debug: {
-        methodUsed: 'failed',
-        timingsMs: { total: 0 },
-        notes: ['Playwright disabled in serverless environment'],
-      },
-    };
-  }
-
   const startTime = Date.now();
   const timeout = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10);
 

@@ -8,6 +8,8 @@ import { Project, CreateProjectRequest, DEFAULT_PROJECT_CONFIG, Slide } from './
 import { v4 as uuidv4 } from 'uuid';
 import { ScrapeResult } from '@/lib/types';
 import { generateVoiceoverScript } from './backend/scriptGenerator';
+import { selectBest4ImagesFor16x9 } from './backend/imageSelector';
+import * as fs from 'fs';
 
 /**
  * Global singleton store for projects (fixes Next.js module isolation)
@@ -45,94 +47,123 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
 
   const projectId = uuidv4();
 
+  // SMART IMAGE SELECTION: Use aspect ratio intelligence to pick best 4 images for 16:9 video
+  console.log(`[ProjectStore] Starting smart image selection (16:9 optimized)...`);
+  const selectedImages = await selectBest4ImagesFor16x9(scraperResult.images);
+  console.log(`[ProjectStore] Smart selection complete: ${selectedImages.length} images selected`);
+
+  if (selectedImages.length === 0) {
+    throw new Error('No valid images found in scraped data. The website may not have accessible images or they may be blocked by CORS. Try a different website.');
+  }
+
+  if (selectedImages.length < 4) {
+    console.warn(`[ProjectStore] WARNING: Only found ${selectedImages.length} valid images, expected 4`);
+  }
+
+  // Calculate total duration for timing
+  const endScreenDuration = 3;
+  const tempContentDuration = selectedImages.length * defaultSlideDuration;
+  const totalDuration = tempContentDuration + endScreenDuration;
+
   // Generate AI-powered voiceover script using Groq
   console.log(`[ProjectStore] Generating AI script for ${scraperResult.business.title}...`);
   const aiScript = await generateVoiceoverScript({
     businessName: scraperResult.business.title,
     description: scraperResult.business.description,
+    totalDuration,
+    slideCount: selectedImages.length,
   });
   console.log(`[ProjectStore] AI script generated successfully`);
 
-  // Prioritize high-quality images: hero > product > banner > other
-  // Filter out icons and very low-scored images
-  const qualityImages = scraperResult.images.filter(
-    (img) => {
-      // Must have valid URL
-      if (!img.url || img.url.length === 0) return false;
-      
-      // Must not be icon type and have good score (increased threshold)
-      if (img.typeGuess === 'icon' || img.score < 0.7) return false;
-      
-      // Validate URL is accessible (basic check)
-      try {
-        const url = new URL(img.url);
-        // Must be http/https
-        if (!['http:', 'https:'].includes(url.protocol)) return false;
-        return true;
-      } catch (e) {
-        console.warn(`[ProjectStore] Invalid image URL: ${img.url}`);
-        return false;
-      }
-    }
-  );
-
-  console.log(`[ProjectStore] Found ${qualityImages.length} quality images (score >= 0.7, excluding icons)`);
-  console.log(`[ProjectStore] Image types:`, qualityImages.map(i => `${i.typeGuess}(${i.score.toFixed(2)})`).join(', '));
-  console.log(`[ProjectStore] Top 5 URLs:`, qualityImages.slice(0, 5).map(i => `${i.url.substring(0, 80)}... (${i.score.toFixed(2)})`).join('\n'));
-
-  // Prefer hero and product images, but fall back to any quality images
-  const heroAndProductImages = qualityImages.filter(
-    (img) => img.typeGuess === 'hero' || img.typeGuess === 'product' || img.typeGuess === 'banner'
-  );
-
-  const imagesToUse = heroAndProductImages.length > 0 
-    ? heroAndProductImages 
-    : qualityImages.slice(0, maxSlides);
-
-  // Take exactly 4 images for main slideshow
-  const selectedImages = imagesToUse.slice(0, 4);
+  // AUTO-GENERATE VOICEOVER AUDIO (Gradium AI)
+  console.log('\n╔════════════════════════════════════════════════════════╗');
+  console.log('║  🎤 AUTO-GENERATING VOICEOVER                          ║');
+  console.log('╚════════════════════════════════════════════════════════╝\n');
+  let voiceAudioPath: string | null = null;
+  let generatedWith: 'gradium' | undefined = undefined;
   
-  console.log(`[ProjectStore] Selected ${selectedImages.length} images for slideshow`);
-  if (selectedImages.length < 4) {
-    console.warn(`[ProjectStore] WARNING: Only found ${selectedImages.length} valid images, expected 4`);
-  }
-
-  // Initialize slides array
-  let slides: Slide[] = [];
-
-  // If we don't have enough images, throw error with helpful message
-  if (selectedImages.length === 0) {
-    // Fallback: try with lower threshold (0.5) if we got 0 with 0.7
-    const fallbackImages = scraperResult.images.filter(
-      (img) => img.url && img.typeGuess !== 'icon' && img.score >= 0.5
-    );
-    
-    if (fallbackImages.length > 0) {
-      console.warn(`[ProjectStore] Using fallback images with score >= 0.5 (found ${fallbackImages.length})`);
-      const fallbackSelected = fallbackImages.slice(0, 4);
-      slides = fallbackSelected.map((img, index) => ({
-        id: uuidv4(),
-        imageUrl: img.url,
-        startTime: index * defaultSlideDuration,
-        endTime: (index + 1) * defaultSlideDuration,
-        transition: 'fade' as const,
-      }));
+  try {
+    const { generateTTS } = await import('./backend/audioMixer');
+    voiceAudioPath = await generateTTS(aiScript, 'en-US-female');
+    if (voiceAudioPath) {
+      // Gradium AI is the only provider now
+      if (voiceAudioPath.includes('voice_gradium_')) {
+        generatedWith = 'gradium';
+      }
+      
+      const fileSizeKB = (fs.statSync(voiceAudioPath).size / 1024).toFixed(2);
+      
+      console.log('╔════════════════════════════════════════════════════════╗');
+      console.log(`║  ✅ VOICEOVER AUTO-GENERATION SUCCESSFUL               ║`);
+      console.log('╠════════════════════════════════════════════════════════╣');
+      console.log(`║  Provider: ${(generatedWith || 'unknown').toUpperCase()}`.padEnd(56) + '║');
+      console.log(`║  File Size: ${fileSizeKB} KB`.padEnd(56) + '║');
+      console.log(`║  Path: ...${voiceAudioPath.substring(voiceAudioPath.length - 35)}`.padEnd(56) + '║');
+      console.log('╚════════════════════════════════════════════════════════╝\n');
     } else {
-      throw new Error('No valid images found in scraped data. The website may not have accessible images or they may be blocked by CORS. Try a different website.');
+      console.log('╔════════════════════════════════════════════════════════╗');
+      console.log('║  ⚠️  VOICEOVER GENERATION FAILED                        ║');
+      console.log('╠════════════════════════════════════════════════════════╣');
+      console.log('║  Will retry during video render                       ║');
+      console.log('╚════════════════════════════════════════════════════════╝\n');
     }
-  } else {
-    // Generate slides with even timing
-    slides = selectedImages.map((img, index) => ({
-      id: uuidv4(),
-      imageUrl: img.url,
-      startTime: index * defaultSlideDuration,
-      endTime: (index + 1) * defaultSlideDuration,
-      transition: 'fade',
-    }));
+  } catch (error) {
+    console.log('╔════════════════════════════════════════════════════════╗');
+    console.log('║  ❌ VOICEOVER GENERATION ERROR                         ║');
+    console.log('╠════════════════════════════════════════════════════════╣');
+    console.log(`║  Error: ${String(error).substring(0, 45)}`.padEnd(56) + '║');
+    console.log('╚════════════════════════════════════════════════════════╝\n');
   }
 
-  // Calculate total duration based on slides (end screen is optional)
-  const baseDuration = slides.length * defaultSlideDuration;
+  // Generate slides with even timing and varied transitions
+  const transitions: Array<'fade' | 'slideup' | 'slidedown' | 'slideleft' | 'slideright' | 'wipeleft' | 'wiperight' | 'circlecrop'> = [
+    'fade', 
+    'slideright', 
+    'slideup', 
+    'wipeleft', 
+    'slidedown', 
+    'wiperight',
+    'slideleft',
+    'circlecrop'
+  ];
+
+  // Motion presets mapped to transitions (Ken Burns effect)
+  const motions: Array<'zoom-in' | 'zoom-out' | 'pan-left' | 'pan-right' | 'pan-up' | 'pan-down'> = [
+    'zoom-in', // fade → Zoom In
+    'pan-left', // slideright → Pan Left
+    'pan-down', // slideup → Pan Down
+    'pan-right', // wipeleft → Pan Right
+    'pan-up', // slidedown → Pan Up
+    'pan-left', // wiperight → Pan Left
+    'pan-right', // slideleft → Pan Right
+    'zoom-in', // circlecrop → Zoom In
+  ];
+  
+  const slides: Slide[] = selectedImages.map((img, index) => ({
+    id: uuidv4(),
+    imageUrl: img.url,
+    startTime: index * defaultSlideDuration,
+    endTime: (index + 1) * defaultSlideDuration,
+    transition: transitions[index % transitions.length], // Rotate through 8 transition types
+    motion: {
+      type: motions[index % motions.length],
+      intensity: 5, // Default intensity (1-10 scale)
+    },
+  }));
+
+  // Add end screen slide (blank slide with text overlay)
+  const contentDuration = slides.length * defaultSlideDuration;
+  slides.push({
+    id: uuidv4(),
+    imageUrl: '', // Blank slide
+    startTime: contentDuration,
+    endTime: contentDuration + endScreenDuration,
+    transition: 'fade',
+    isEndScreen: true,
+  });
+
+  // Calculate total duration including end screen
+  const baseDuration = contentDuration + endScreenDuration;
 
   // Get logo URL from brand data
   const logoUrl = scraperResult.brand.logoCandidates?.[0] || scraperResult.brand.favicon || null;
@@ -145,7 +176,8 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
     slides,
     bottomBanner: {
       ...DEFAULT_PROJECT_CONFIG.bottomBanner,
-      text: scraperResult.business.phones[0] || scraperResult.business.emails[0] || '',
+      enabled: true,
+      text: scraperResult.business.phones[0] || scraperResult.business.emails[0] || scraperResult.business.title,
       logoUrl,
       endTime: baseDuration,
     },
@@ -157,23 +189,35 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
     music: { ...DEFAULT_PROJECT_CONFIG.music },
     voice: {
       ...DEFAULT_PROJECT_CONFIG.voice,
+      enabled: true, // Auto-enable voiceover
       script: aiScript, // AI-generated script from Groq
+      audioPath: voiceAudioPath, // Pre-generated audio (or null if failed)
+      generatedWith, // Track which provider was used (gradium only)
     },
     endScreen: {
-      ...DEFAULT_PROJECT_CONFIG.endScreen, // enabled: false by default
+      ...DEFAULT_PROJECT_CONFIG.endScreen,
+      enabled: true, // Auto-enable end screen
       content: `Thank you for watching! Visit ${scraperResult.business.title}`,
       logoUrl,
+      companyName: scraperResult.brand.name,
+      phoneNumber: scraperResult.business.phones[0] || '',
+      websiteLink: scraperResult.inputUrl ? new URL(scraperResult.inputUrl).hostname : '',
+      backgroundColor: '#FFFFFF',
+      textColor: '#000000',
+      phoneNumberColor: '#F59E0B',
     },
     status: 'draft',
     previewVideoUrl: null,
     finalVideoUrl: null,
+    lastPreviewConfigHash: null,
+    lastPreviewRenderedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 
   projects.set(projectId, project);
 
-  console.log(`[ProjectStore] Created project ${projectId} with ${slides.length} slides (hero images only)`);
+  console.log(`[ProjectStore] Created project ${projectId} with ${slides.length} slides (${slides.length - 1} content + 1 end screen)`);
 
   return project;
 }

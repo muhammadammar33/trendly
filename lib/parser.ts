@@ -11,9 +11,10 @@ import {
   parseSrcSet,
   deduplicateImages,
   sortImagesByScore,
+  aggregateImagesFromPages,
   ImageCandidate,
 } from './images';
-import type { ScrapeResult, BusinessInfo, BrandInfo, SocialLinks } from './types';
+import type { ScrapeResult, BusinessInfo, BrandInfo, SocialLinks, CrawlStats } from './types';
 
 export interface ParseOptions {
   html: string;
@@ -59,6 +60,85 @@ export async function parseStaticHtml(options: ParseOptions): Promise<Partial<Sc
         `Parsed ${images.length} raw images`,
         `After deduplication: ${dedupedImages.length} unique images`,
         `Image types found: ${Array.from(new Set(images.map(i => i.typeGuess))).join(', ')}`,
+        `Top 5 scores: ${sortedImages.slice(0, 5).map(i => `${i.typeGuess}(${i.score})`).join(', ')}`,
+        `Found ${business.emails.length} emails`,
+      ],
+    },
+  };
+}
+
+/**
+ * Parse multiple pages from a crawl and aggregate data
+ */
+export async function parseMultiplePages(
+  pages: Array<{ url: string; html: string }>,
+  inputUrl: string,
+  internalCrawlStats: { pagesVisited: number; pagesSkipped: number; pagesFailed: number; crawlTimeMs: number }
+): Promise<Partial<ScrapeResult>> {
+  const startTime = Date.now();
+
+  if (pages.length === 0) {
+    throw new Error('No pages to parse');
+  }
+
+  // Parse the first page (homepage) for business and brand info
+  const firstPage = pages[0];
+  const $first = cheerio.load(firstPage.html);
+
+  const [business, brand] = await Promise.all([
+    extractBusinessInfo($first, firstPage.url),
+    extractBrandInfo($first, firstPage.html, firstPage.url),
+  ]);
+
+  // Extract images from all pages
+  const allPagesImages: ImageCandidate[][] = [];
+  const pageUrls: string[] = [];
+
+  for (const page of pages) {
+    const $ = cheerio.load(page.html);
+    const images = await extractImages($, page.url);
+    allPagesImages.push(images);
+    pageUrls.push(page.url);
+  }
+
+  // Aggregate and deduplicate images across all pages
+  const aggregatedImages = aggregateImagesFromPages(allPagesImages, pageUrls, firstPage.url);
+  const dedupedImages = deduplicateImages(aggregatedImages);
+  const sortedImages = sortImagesByScore(dedupedImages);
+
+  const totalRawImages = allPagesImages.reduce((sum, imgs) => sum + imgs.length, 0);
+
+  const timingsMs = {
+    parsing: Date.now() - startTime,
+  };
+
+  // Build crawl stats with image counts
+  const finalCrawlStats: CrawlStats = {
+    pagesVisited: internalCrawlStats.pagesVisited,
+    pagesSkipped: internalCrawlStats.pagesSkipped,
+    pagesFailed: internalCrawlStats.pagesFailed,
+    imagesFound: totalRawImages,
+    crawlTimeMs: internalCrawlStats.crawlTimeMs,
+  };
+
+  return {
+    status: 'ok',
+    inputUrl,
+    finalUrl: firstPage.url,
+    fetchedAt: new Date().toISOString(),
+    business,
+    brand,
+    images: sortedImages,
+    crawlStats: finalCrawlStats,
+    debug: {
+      methodUsed: 'static',
+      timingsMs,
+      notes: [
+        `Crawled ${pages.length} pages`,
+        `Found ${totalRawImages} raw images across all pages`,
+        `After aggregation: ${aggregatedImages.length} images`,
+        `After deduplication: ${dedupedImages.length} unique images`,
+        `Image types found: ${Array.from(new Set(sortedImages.map(i => i.typeGuess))).join(', ')}`,
         `Top 5 scores: ${sortedImages.slice(0, 5).map(i => `${i.typeGuess}(${i.score})`).join(', ')}`,
         `Found ${business.emails.length} emails`,
       ],
@@ -299,6 +379,40 @@ async function extractBrandInfo(
   html: string,
   baseUrl: string
 ): Promise<BrandInfo> {
+  // Extract brand name from multiple sources
+  let brandName = '';
+  
+  // 1. Try og:site_name meta tag (most reliable)
+  brandName = $('meta[property="og:site_name"]').attr('content') || '';
+  
+  // 2. Try application-name meta tag
+  if (!brandName) {
+    brandName = $('meta[name="application-name"]').attr('content') || '';
+  }
+  
+  // 3. Try schema.org name
+  if (!brandName) {
+    $('script[type="application/ld+json"]').each((_, elem) => {
+      try {
+        const json = JSON.parse($(elem).html() || '{}');
+        const name = findNameInSchema(json);
+        if (name) brandName = name;
+      } catch (e) {
+        // Invalid JSON
+      }
+    });
+  }
+  
+  // 4. Extract from page title (last resort)
+  if (!brandName) {
+    const title = $('title').text().trim();
+    if (title) {
+      // Try to extract brand name from title by splitting on common separators
+      const parts = title.split(/[-–—|]/)[0].trim();
+      brandName = parts;
+    }
+  }
+  
   // Favicon
   const favicon =
     normalizeUrl($('link[rel="icon"]').attr('href') || '', baseUrl) ||
@@ -375,10 +489,38 @@ async function extractBrandInfo(
   const brandColors = extractColors(html, $);
 
   return {
+    name: brandName,
     favicon,
     logoCandidates: [...new Set(logoCandidates.filter(Boolean))].slice(0, 10),
     brandColors,
   };
+}
+
+/**
+ * Find name in schema.org JSON-LD
+ */
+function findNameInSchema(json: any): string | null {
+  if (!json) return null;
+
+  if (Array.isArray(json)) {
+    for (const item of json) {
+      const name = findNameInSchema(item);
+      if (name) return name;
+    }
+    return null;
+  }
+
+  // Look for name property
+  if (json.name && typeof json.name === 'string') {
+    return json.name;
+  }
+
+  // Recurse into @graph
+  if (json['@graph']) {
+    return findNameInSchema(json['@graph']);
+  }
+
+  return null;
 }
 
 /**
@@ -432,7 +574,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
       if (src && src.trim().length > 0) {
         const normalized = normalizeUrl(src.trim(), baseUrl);
         if (normalized && normalized.length > 0 && filterImage(normalized)) {
-          images.push(scoreImage(normalized, 'img', alt, className));
+          images.push(scoreImage(normalized, 'img', alt, className, baseUrl));
         }
       }
     });
@@ -443,7 +585,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
       const srcsetUrls = parseSrcSet(srcset, baseUrl);
       srcsetUrls.forEach((url) => {
         if (url && url.length > 0) {
-          images.push(scoreImage(url, 'srcset', alt, className));
+          images.push(scoreImage(url, 'srcset', alt, className, baseUrl));
         }
       });
     }
@@ -455,7 +597,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
     if (srcset) {
       const srcsetUrls = parseSrcSet(srcset, baseUrl);
       srcsetUrls.forEach((url) => {
-        images.push(scoreImage(url, 'srcset', '', 'picture'));
+        images.push(scoreImage(url, 'srcset', '', 'picture', baseUrl));
       });
     }
   });
@@ -466,7 +608,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
     if (content) {
       const normalized = normalizeUrl(content, baseUrl);
       if (normalized && filterImage(normalized)) {
-        images.push(scoreImage(normalized, 'og'));
+        images.push(scoreImage(normalized, 'og', '', '', baseUrl));
       }
     }
   });
@@ -477,7 +619,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
     if (content) {
       const normalized = normalizeUrl(content, baseUrl);
       if (normalized && filterImage(normalized)) {
-        images.push(scoreImage(normalized, 'twitter'));
+        images.push(scoreImage(normalized, 'twitter', '', '', baseUrl));
       }
     }
   });
@@ -488,7 +630,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
     if (content) {
       const normalized = normalizeUrl(content, baseUrl);
       if (normalized && filterImage(normalized)) {
-        images.push(scoreImage(normalized, 'og'));
+        images.push(scoreImage(normalized, 'og', '', '', baseUrl));
       }
     }
   });
@@ -498,7 +640,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
     const href = $(elem).attr('href') || '';
     const normalized = normalizeUrl(href, baseUrl);
     if (normalized && filterImage(normalized)) {
-      images.push(scoreImage(normalized, 'icon'));
+      images.push(scoreImage(normalized, 'icon', '', '', baseUrl));
     }
   });
 
@@ -511,7 +653,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
       const normalized = normalizeUrl(match[1], baseUrl);
       if (normalized && filterImage(normalized)) {
         const className = $(elem).attr('class') || '';
-        images.push(scoreImage(normalized, 'css', '', className));
+        images.push(scoreImage(normalized, 'css', '', className, baseUrl));
       }
     }
   });
@@ -523,7 +665,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
       const normalized = normalizeUrl(bg, baseUrl);
       if (normalized && filterImage(normalized)) {
         const className = $(elem).attr('class') || '';
-        images.push(scoreImage(normalized, 'css', '', className));
+        images.push(scoreImage(normalized, 'css', '', className, baseUrl));
       }
     }
   });
@@ -535,7 +677,7 @@ async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<Im
       const normalized = normalizeUrl(src, baseUrl);
       const alt = $(elem).attr('alt') || '';
       if (normalized && filterImage(normalized)) {
-        images.push(scoreImage(normalized, 'img', alt, 'featured'));
+        images.push(scoreImage(normalized, 'img', alt, 'featured', baseUrl));
       }
     }
   });

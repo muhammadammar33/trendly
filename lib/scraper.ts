@@ -3,18 +3,28 @@
  */
 
 import { fetch as undiciFetch } from 'undici';
-import { parseStaticHtml } from './parser';
+import { parseStaticHtml, parseMultiplePages } from './parser';
 import { scrapeWithPlaywright, shouldUsePlaywright } from './playwright';
 import { validateUrl } from './validation';
+import { crawlWebsite, CrawlOptions } from './crawler';
 import type { ScrapeResult } from './types';
 
 const MAX_RESPONSE_SIZE = parseInt(process.env.MAX_RESPONSE_SIZE || '10485760', 10); // 10MB
 const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT_MS || '30000', 10); // 30s
 
+export interface ScrapeOptions {
+  enableCrawling?: boolean; // Enable multi-page crawling
+  crawlOptions?: CrawlOptions; // Crawler configuration
+}
+
 /**
  * Main scraping function - tries static first, falls back to Playwright if needed
+ * Now supports multi-page crawling when enableCrawling is true
  */
-export async function scrapeWebsite(inputUrl: string): Promise<ScrapeResult> {
+export async function scrapeWebsite(
+  inputUrl: string,
+  options: ScrapeOptions = {}
+): Promise<ScrapeResult> {
   const startTime = Date.now();
 
   // Validate URL
@@ -43,6 +53,7 @@ export async function scrapeWebsite(inputUrl: string): Promise<ScrapeResult> {
         },
       },
       brand: {
+        name: '',
         favicon: '',
         logoCandidates: [],
         brandColors: [],
@@ -60,6 +71,48 @@ export async function scrapeWebsite(inputUrl: string): Promise<ScrapeResult> {
   const normalizedUrl = validation.normalizedUrl!;
 
   try {
+    // Multi-page crawling mode
+    if (options.enableCrawling) {
+      console.log('[Scraper] Multi-page crawling enabled');
+      
+      const crawlResult = await crawlWebsite(normalizedUrl, options.crawlOptions);
+      
+      if (crawlResult.pages.length === 0) {
+        throw new Error('No pages were successfully crawled');
+      }
+
+      // Filter successful pages
+      const successfulPages = crawlResult.pages
+        .filter(p => p.success)
+        .map(p => ({ url: p.url, html: p.html }));
+
+      if (successfulPages.length === 0) {
+        throw new Error('All pages failed to load');
+      }
+
+      console.log(`[Scraper] Successfully crawled ${successfulPages.length} pages`);
+
+      // Parse all pages
+      const result = await parseMultiplePages(
+        successfulPages,
+        inputUrl,
+        crawlResult.stats
+      );
+
+      return {
+        ...result,
+        debug: {
+          ...result.debug!,
+          timingsMs: {
+            ...result.debug!.timingsMs,
+            crawl: crawlResult.stats.crawlTimeMs || 0,
+            total: Date.now() - startTime,
+          },
+        },
+      } as ScrapeResult;
+    }
+
+    // Single-page mode (original behavior)
     // Try static fetch first
     const fetchStart = Date.now();
     const response = await undiciFetch(normalizedUrl, {
@@ -149,26 +202,28 @@ export async function scrapeWebsite(inputUrl: string): Promise<ScrapeResult> {
   } catch (error: any) {
     console.error('Scraping error:', error);
 
-    // Try Playwright as last resort
-    try {
-      console.log('Static fetch failed, trying Playwright...');
-      const playwrightResult = await scrapeWithPlaywright(normalizedUrl, inputUrl);
-      
-      if (playwrightResult.status !== 'error') {
-        return {
-          ...playwrightResult,
-          status: 'partial',
-          debug: {
-            ...playwrightResult.debug!,
-            notes: [
-              ...playwrightResult.debug!.notes,
-              'Static fetch failed, used Playwright as fallback',
-            ],
-          },
-        } as ScrapeResult;
+    // Try Playwright as last resort (only in single-page mode)
+    if (!options.enableCrawling) {
+      try {
+        console.log('Static fetch failed, trying Playwright...');
+        const playwrightResult = await scrapeWithPlaywright(normalizedUrl, inputUrl);
+        
+        if (playwrightResult.status !== 'error') {
+          return {
+            ...playwrightResult,
+            status: 'partial',
+            debug: {
+              ...playwrightResult.debug!,
+              notes: [
+                ...playwrightResult.debug!.notes,
+                'Static fetch failed, used Playwright as fallback',
+              ],
+            },
+          } as ScrapeResult;
+        }
+      } catch (playwrightError) {
+        console.error('Playwright fallback also failed:', playwrightError);
       }
-    } catch (playwrightError) {
-      console.error('Playwright fallback also failed:', playwrightError);
     }
 
     return {
@@ -194,6 +249,7 @@ export async function scrapeWebsite(inputUrl: string): Promise<ScrapeResult> {
         },
       },
       brand: {
+        name: '',
         favicon: '',
         logoCandidates: [],
         brandColors: [],

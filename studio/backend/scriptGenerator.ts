@@ -12,6 +12,8 @@ export interface ScriptGeneratorInput {
   tagline?: string;
   services?: string[];
   products?: string[];
+  totalDuration?: number; // Total video duration in seconds
+  slideCount?: number; // Number of content slides
 }
 
 /**
@@ -35,7 +37,7 @@ export async function generateVoiceoverScript(
       messages: [
         {
           role: 'system',
-          content: 'You are a professional marketing copywriter. Generate engaging, concise voiceover scripts for promotional videos. Keep scripts around 25 seconds when read aloud. Be persuasive and highlight key value propositions.'
+          content: 'You are a professional marketing copywriter. Generate engaging, concise voiceover scripts for promotional videos. Keep scripts around 10 to 15 seconds when read aloud. Be persuasive and highlight key value propositions.'
         },
         {
           role: 'user',
@@ -113,7 +115,7 @@ export async function generateVoiceoverScript(
  * Build prompt for Groq API
  */
 function buildPrompt(input: ScriptGeneratorInput): string {
-  let prompt = `Create a professional 25 second voiceover script for a promotional video about ${input.businessName}.`;
+  let prompt = `Create a professional 10 to 15 second voiceover script for a promotional video about ${input.businessName}.`;
   
   if (input.description) {
     prompt += `\n\nBusiness Description: ${input.description}`;
@@ -135,7 +137,7 @@ function buildPrompt(input: ScriptGeneratorInput): string {
   prompt += '- Write in a conversational, engaging tone\n';
   prompt += '- Highlight unique value propositions\n';
   prompt += '- Include a subtle call-to-action\n';
-  prompt += '- Keep it concise (15-30 seconds when spoken)\n';
+  prompt += '- Keep it concise (10-15 seconds when spoken)\n';
   prompt += '- No markdown formatting, just plain text\n';
   prompt += '- Return ONLY the script text, nothing else';
   

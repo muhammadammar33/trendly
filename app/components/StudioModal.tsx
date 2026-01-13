@@ -97,10 +97,76 @@ export default function StudioModal({
     }
   }, [isOpen, projectId]);
 
+  // Auto-generate preview when project loads (if not already generated or config changed)
+  useEffect(() => {
+    if (!project || renderLoading) return;
+
+    const shouldGeneratePreview = () => {
+      // If no preview exists, generate it
+      if (!project.previewVideoUrl) {
+        console.log('[StudioModal] No preview exists, will auto-generate');
+        return true;
+      }
+
+      // If config hash exists and matches, don't regenerate
+      if (project.lastPreviewConfigHash) {
+        const currentHash = generateConfigHash(project);
+        console.log('[StudioModal] Current hash:', currentHash, 'Saved hash:', project.lastPreviewConfigHash);
+        if (currentHash === project.lastPreviewConfigHash) {
+          console.log('[StudioModal] Config unchanged, skipping auto-preview');
+          return false;
+        }
+        console.log('[StudioModal] Config changed, will regenerate preview');
+        return true;
+      }
+
+      // No hash stored yet, don't auto-regenerate
+      return false;
+    };
+
+    if (shouldGeneratePreview()) {
+      console.log('[StudioModal] Auto-generating preview video...');
+      handleRenderPreview();
+    }
+  }, [project, renderLoading]);
+
+  // Helper: Generate config hash for change detection (matches server implementation)
+  const generateConfigHash = (proj: Project): string => {
+    const config = {
+      slides: proj.slides.map(s => ({ 
+        url: s.imageUrl, 
+        start: s.startTime, 
+        end: s.endTime,
+        transition: s.transition 
+      })),
+      banner: proj.bottomBanner?.enabled ? {
+        text: proj.bottomBanner.text,
+        logo: proj.bottomBanner.logoUrl,
+        color: proj.bottomBanner.backgroundColor,
+      } : null,
+      qr: proj.qrCode?.enabled ? proj.qrCode.url : null,
+      music: proj.music?.enabled ? proj.music.fileName : null,
+      voice: proj.voice?.enabled ? proj.voice.script : null,
+      endScreen: proj.endScreen?.enabled ? proj.endScreen.content : null,
+    };
+    
+    // Fix Unicode issue: encode to UTF-8 bytes first, then base64
+    const jsonString = JSON.stringify(config);
+    const utf8Bytes = new TextEncoder().encode(jsonString);
+    const binaryString = Array.from(utf8Bytes, byte => String.fromCharCode(byte)).join('');
+    return btoa(binaryString).substring(0, 32);
+  };
+
   // Video event listeners
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
+    // Stop playback when video URL changes
+    if (video && !video.paused) {
+      video.pause();
+      setIsPlaying(false);
+    }
 
     const handleTimeUpdate = () => setCurrentTime(video.currentTime);
     const handleLoadedMetadata = () => {
@@ -110,12 +176,17 @@ export default function StudioModal({
     const handlePlay = () => setIsPlaying(true);
     const handlePause = () => setIsPlaying(false);
     const handleEnded = () => setIsPlaying(false);
+    const handleError = (e: Event) => {
+      console.error("Video error:", e);
+      setIsPlaying(false);
+    };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("play", handlePlay);
     video.addEventListener("pause", handlePause);
     video.addEventListener("ended", handleEnded);
+    video.addEventListener("error", handleError);
 
     // If video already has metadata loaded, set duration immediately
     if (video.duration && !isNaN(video.duration)) {
@@ -127,12 +198,16 @@ export default function StudioModal({
     video.playbackRate = playbackSpeed;
     video.muted = isMuted;
 
+    // Load the video
+    video.load();
+
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
       video.removeEventListener("play", handlePlay);
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("ended", handleEnded);
+      video.removeEventListener("error", handleError);
     };
   }, [project?.previewVideoUrl]);
 
@@ -223,7 +298,9 @@ export default function StudioModal({
           setRenderLoading(false);
           clearInterval(interval);
           setCurrentRenderJobId(null);
+          console.log('[StudioModal] Render completed, reloading project...');
           await loadProject();
+          console.log('[StudioModal] Project reloaded after render');
         } else if (job.status === "error") {
           setRenderLoading(false);
           clearInterval(interval);
@@ -244,6 +321,11 @@ export default function StudioModal({
       if (!response.ok) throw new Error("Project not found");
 
       const data = await response.json();
+      console.log('[StudioModal] Loaded project data:', {
+        projectId: data.projectId,
+        previewVideoUrl: data.previewVideoUrl,
+        lastPreviewRenderedAt: data.lastPreviewRenderedAt,
+      });
       setProject(data);
       setLoading(false);
     } catch (err) {
@@ -277,14 +359,33 @@ export default function StudioModal({
   const togglePlayPause = () => {
     const video = videoRef.current;
     if (!video) return;
+    
+    // Check if video is ready to play
+    if (video.readyState < 2) {
+      console.warn("Video not ready yet, waiting for metadata...");
+      return;
+    }
+
     if (isPlaying) {
       video.pause();
     } else {
-      video.play().catch((error) => {
-        console.error("Failed to play video:", error);
-        // Browser might require user interaction first
-        alert("Unable to play video. Please click the play button again.");
-      });
+      // Use a promise to handle play() properly
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            // Video started playing successfully
+            console.log("Video playback started");
+          })
+          .catch((error) => {
+            console.error("Failed to play video:", error);
+            setIsPlaying(false);
+            // Only show alert for non-abort errors
+            if (error.name !== 'AbortError') {
+              showToast("Unable to play video. Please try again.", "error");
+            }
+          });
+      }
     }
   };
 
@@ -1259,6 +1360,51 @@ function EndScreenControls({ project, onUpdate }: ControlProps) {
 
       {project.endScreen.enabled && (
         <div className="space-y-5 animate-in fade-in slide-in-from-top duration-300">
+          {/* Company Name */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wide">
+              Company Name
+            </label>
+            <input
+              type="text"
+              value={project.endScreen.companyName}
+              onChange={(e) => updateEndScreen({ companyName: e.target.value })}
+              className="w-full px-4 py-3 bg-gray-700/50 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600 focus:bg-gray-700 transition-all border border-gray-700/50"
+              placeholder="Enter company name (e.g., SAPPHIRE)"
+              aria-label="Company name for end screen"
+            />
+          </div>
+
+          {/* Phone Number */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wide">
+              Phone Number
+            </label>
+            <input
+              type="text"
+              value={project.endScreen.phoneNumber}
+              onChange={(e) => updateEndScreen({ phoneNumber: e.target.value })}
+              className="w-full px-4 py-3 bg-gray-700/50 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600 focus:bg-gray-700 transition-all border border-gray-700/50"
+              placeholder="Enter phone number (e.g., +92 123 4567890)"
+              aria-label="Phone number for end screen"
+            />
+          </div>
+
+          {/* Website Link */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wide">
+              Website Link
+            </label>
+            <input
+              type="text"
+              value={project.endScreen.websiteLink}
+              onChange={(e) => updateEndScreen({ websiteLink: e.target.value })}
+              className="w-full px-4 py-3 bg-gray-700/50 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600 focus:bg-gray-700 transition-all border border-gray-700/50"
+              placeholder="Enter website (e.g., example.com)"
+              aria-label="Website link for end screen"
+            />
+          </div>
+
           {/* Logo Upload */}
           <div>
             <label className="block text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wide">
@@ -1294,7 +1440,7 @@ function EndScreenControls({ project, onUpdate }: ControlProps) {
               <label className="text-sm font-semibold text-gray-400 uppercase tracking-wide">
                 Duration
               </label>
-              <span className="text-red-500 font-bold">
+              <span className="text-purple-500 font-bold">
                 {project.endScreen.duration}s
               </span>
             </div>
@@ -1307,45 +1453,30 @@ function EndScreenControls({ project, onUpdate }: ControlProps) {
               onChange={(e) =>
                 updateEndScreen({ duration: parseFloat(e.target.value) })
               }
-              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-600"
+              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
               aria-label="End screen duration in seconds"
-            />
-          </div>
-
-          {/* Content */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wide">
-              Content
-            </label>
-            <textarea
-              value={project.endScreen.content}
-              onChange={(e) => updateEndScreen({ content: e.target.value })}
-              className="w-full px-4 py-3 bg-gray-700/50 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-red-600 focus:bg-gray-700 transition-all border border-gray-700/50"
-              placeholder="Enter end screen content..."
-              rows={4}
-              aria-label="End screen text content"
             />
           </div>
 
           {/* Color Pickers */}
           <div className="grid grid-cols-2 gap-4">
-            {/* Background Color */}
+            {/* Phone Number Color */}
             <div>
               <label className="block text-sm font-semibold text-gray-400 mb-2 uppercase tracking-wide">
-                Background
+                Phone Color
               </label>
               <div className="relative group">
                 <input
                   type="color"
-                  value={project.endScreen.backgroundColor}
+                  value={project.endScreen.phoneNumberColor}
                   onChange={(e) =>
-                    updateEndScreen({ backgroundColor: e.target.value })
+                    updateEndScreen({ phoneNumberColor: e.target.value })
                   }
-                  className="w-full h-12 rounded-lg cursor-pointer border-2 border-gray-700 hover:border-red-600 transition-colors"
-                  aria-label="End screen background color"
-                  title="End screen background color"
+                  className="w-full h-12 rounded-lg cursor-pointer border-2 border-gray-700 hover:border-purple-600 transition-colors"
+                  aria-label="Phone number color"
+                  title="Phone number color"
                 />
-                <div className="absolute inset-0 rounded-lg ring-2 ring-transparent group-hover:ring-red-600/50 transition-all pointer-events-none" />
+                <div className="absolute inset-0 rounded-lg ring-2 ring-transparent group-hover:ring-purple-600/50 transition-all pointer-events-none" />
               </div>
             </div>
 
@@ -1361,14 +1492,20 @@ function EndScreenControls({ project, onUpdate }: ControlProps) {
                   onChange={(e) =>
                     updateEndScreen({ textColor: e.target.value })
                   }
-                  className="w-full h-12 rounded-lg cursor-pointer border-2 border-gray-700 hover:border-red-600 transition-colors"
+                  className="w-full h-12 rounded-lg cursor-pointer border-2 border-gray-700 hover:border-purple-600 transition-colors"
                   aria-label="End screen text color"
                   title="End screen text color"
                 />
-                <div className="absolute inset-0 rounded-lg ring-2 ring-transparent group-hover:ring-red-600/50 transition-all pointer-events-none" />
+                <div className="absolute inset-0 rounded-lg ring-2 ring-transparent group-hover:ring-purple-600/50 transition-all pointer-events-none" />
               </div>
             </div>
           </div>
+
+          {/* Legacy Content Field (hidden but kept for backwards compatibility) */}
+          <input
+            type="hidden"
+            value={project.endScreen.content}
+          />
         </div>
       )}
     </div>
@@ -2002,8 +2139,9 @@ function CenterPanel({
           <div className="relative w-full h-full flex items-center justify-center">
             <div className="absolute -inset-0.5 bg-gradient-to-r from-red-600 to-purple-600 rounded-xl opacity-10 blur-2xl pointer-events-none" />
             <video
+              key={project.previewVideoUrl}
               ref={videoRef}
-              src={project.previewVideoUrl}
+              src={`${project.previewVideoUrl}?t=${project.lastPreviewRenderedAt ? new Date(project.lastPreviewRenderedAt).getTime() : Date.now()}`}
               className="relative z-10 max-w-full max-h-full rounded-xl shadow-2xl border border-gray-800/50 [max-height:calc(100vh-400px)]"
               preload="metadata"
               playsInline
@@ -2268,11 +2406,17 @@ function RightPanel({ project, onUpdate }: RightPanelProps) {
               >
                 <div className="flex items-center gap-3">
                   <div className="relative">
-                    <img
-                      src={slide.imageUrl}
-                      alt=""
-                      className="w-12 h-12 object-cover rounded-lg shadow-md group-hover:shadow-indigo-600/50 transition-shadow"
-                    />
+                    {slide.imageUrl ? (
+                      <img
+                        src={slide.imageUrl}
+                        alt=""
+                        className="w-12 h-12 object-cover rounded-lg shadow-md group-hover:shadow-indigo-600/50 transition-shadow"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 bg-gradient-to-br from-indigo-900 to-purple-900 rounded-lg shadow-md group-hover:shadow-indigo-600/50 transition-shadow flex items-center justify-center">
+                        <span className="text-white text-xs font-bold">END</span>
+                      </div>
+                    )}
                     <div className="absolute -top-1 -right-1 w-5 h-5 bg-red-600 text-white text-xs font-bold rounded-full flex items-center justify-center">
                       {index + 1}
                     </div>

@@ -9,7 +9,8 @@
     "lint": "next lint",
     "playwright:install": "playwright install chromium",
     "vercel-build": "next build",
-    "postinstall": "echo 'Skipping Playwright browser download on Vercel'"
+    "postinstall": "echo 'Skipping Playwright browser download on Vercel'",
+    "test:gradium": "npx tsx test-gradium.ts"
   },
   "dependencies": {
     "cheerio": "^1.0.0-rc.12",
@@ -22,7 +23,8 @@
     "react-dom": "19.2.3",
     "sharp": "^0.34.5",
     "undici": "^6.6.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -31,6 +33,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/uuid": "^9.0.8",
+    "@types/ws": "^8.5.13",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

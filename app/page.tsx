@@ -3,13 +3,13 @@
 import { Search } from "lucide-react";
 import { useState } from "react";
 import type { ScrapeResult } from "@/lib/types";
-import StudioModal from "./components/StudioModal";
+import StudioModal from "@/app/components/StudioModalV2";
 
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<ScrapeResult | null>(null);
   const [error, setError] = useState("");
+  const [result, setResult] = useState<ScrapeResult | null>(null);
   const [studioProjectId, setStudioProjectId] = useState<string | null>(null);
   const [isStudioOpen, setIsStudioOpen] = useState(false);
 
@@ -21,37 +21,30 @@ export default function Home() {
 
     setLoading(true);
     setError("");
-    setResult(null);
 
     try {
-      const response = await fetch("/api/scrape", {
+      // Step 1: Scrape website
+      const scrapeResponse = await fetch("/api/scrape", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ 
+          url: url.trim(),
+          enableCrawling: true // Enable multi-page crawling for better images
+        }),
       });
 
-      const data = await response.json();
+      const scraperResult = await scrapeResponse.json();
 
-      if (data.status === "error") {
-        setError(data.error || "Failed to scrape website");
-      } else {
-        setResult(data);
-        // Open Studio modal after successful scrape
-        await openStudio(data);
+      if (scraperResult.status === "error") {
+        setError(scraperResult.error || "Failed to scrape website");
+        setLoading(false);
+        return;
       }
-    } catch (err: any) {
-      setError(err.message || "Network error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  // Open Studio modal with scraper result
-  const openStudio = async (scraperResult: ScrapeResult) => {
-    try {
-      const response = await fetch("/api/studio/project/create", {
+      // Step 2: Auto-create studio project
+      const projectResponse = await fetch("/api/studio/project/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -63,16 +56,22 @@ export default function Home() {
         }),
       });
 
-      const data = await response.json();
+      const projectData = await projectResponse.json();
 
-      if (data.projectId) {
-        setStudioProjectId(data.projectId);
+      if (projectData.projectId) {
+        // Step 3: Auto-open studio modal
+        console.log('[Home] Opening studio modal:', projectData.projectId);
+        setResult(scraperResult);
+        setStudioProjectId(projectData.projectId);
         setIsStudioOpen(true);
+        setLoading(false);
       } else {
-        console.error("Failed to create studio project:", data);
+        setError(projectData.error || "Failed to create studio project");
+        setLoading(false);
       }
-    } catch (err) {
-      console.error("Failed to open studio:", err);
+    } catch (err: any) {
+      setError(err.message || "Network error occurred");
+      setLoading(false);
     }
   };
 
@@ -230,7 +229,11 @@ export default function Home() {
         <StudioModal
           projectId={studioProjectId}
           isOpen={isStudioOpen}
-          onClose={() => setIsStudioOpen(false)}
+          onClose={() => {
+            setIsStudioOpen(false);
+            setStudioProjectId(null);
+            setResult(null);
+          }}
         />
       )}
     </div>
