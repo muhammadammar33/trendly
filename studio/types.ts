@@ -103,7 +103,7 @@ export interface Voice {
   volume: number; // 0-100
   language?: string; // Language code (e.g., 'en-US', 'es-ES')
   audioPath?: string | null; // Pre-generated audio file path (auto-generated during project creation)
-  generatedWith?: 'gradium'; // Track which service was actually used (Gradium AI only)
+  generatedWith?: 'gradium' | 'piper'; // Track which service was actually used
   subtitlePath?: string; // Generated subtitle file path (SRT)
 }
 
