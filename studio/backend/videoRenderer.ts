@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
 import * as http from 'http';
+import sharp from 'sharp';
 import { buildInputList, calculateDuration, validateTimeline, normalizeTimeline, addEndScreen } from './timelineBuilder';
 import { generateBannerFilter, generateQRFilter, generateEndScreenFilter } from './overlayRenderer';
 import { generateTTS, buildAudioFilter } from './audioMixer';
@@ -45,96 +46,126 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
     onProgress?.(progress, stage);
   };
 
+  const startTime = Date.now();
+  console.log(`[VideoRenderer] ===== RENDER START (${resolution}) =====`);
+  console.log(`[VideoRenderer] Project ID: ${project.projectId}`);
+  console.log(`[VideoRenderer] Slides count: ${project.slides.length}`);
+
   try {
     // Use project.slides directly (already includes end screen from projectStore)
     const allSlides = project.slides;
+    console.log(`[VideoRenderer] Project has ${allSlides.length} total slides`);
 
     // Validate timeline
     report(5, 'Validating timeline');
+    console.log('[VideoRenderer] Step 1: Validating timeline...');
     const validation = validateTimeline(project.slides);
     if (!validation.valid) {
       throw new Error(`Timeline validation failed: ${validation.errors.join(', ')}`);
     }
+    console.log('[VideoRenderer] ✓ Timeline validated successfully');
 
-    // Create working directory (use /tmp for serverless compatibility)
-    const workDir = path.join('/tmp', 'studio', project.projectId);
+    // Create working directory
+    console.log('[VideoRenderer] Step 2: Creating working directories...');
+    const workDir = path.join(process.cwd(), 'tmp', 'studio', project.projectId);
     const imagesDir = path.join(workDir, 'images');
     const audioDir = path.join(workDir, 'audio');
 
     fs.mkdirSync(imagesDir, { recursive: true });
     fs.mkdirSync(audioDir, { recursive: true });
+    console.log(`[VideoRenderer] ✓ Work dir created: ${workDir}`);
 
     // Download images (including end screen)
     report(10, 'Downloading images');
+    console.log(`[VideoRenderer] Step 3: Downloading ${allSlides.length} images...`);
     await downloadImages(allSlides, imagesDir);
+    console.log('[VideoRenderer] ✓ All images downloaded successfully');
 
     // Generate QR code if enabled
     report(30, 'Generating QR code');
+    console.log('[VideoRenderer] Step 4: Processing QR code...');
     let qrPath: string | null = null;
     if (project.qrCode.enabled && project.qrCode.url) {
       qrPath = path.join(workDir, 'qr.png');
       try {
+        console.log(`[VideoRenderer] Generating QR for: ${project.qrCode.url}`);
         await generateQRCode(project.qrCode.url, qrPath, project.qrCode.size);
+        console.log('[VideoRenderer] ✓ QR code generated');
       } catch (err) {
-        console.warn('[VideoRenderer] QR generation failed, continuing without QR:', err);
+        console.warn('[VideoRenderer] ⚠ QR generation failed, continuing without QR:', err);
         qrPath = null;
       }
+    } else {
+      console.log('[VideoRenderer] QR code disabled, skipping');
     }
 
     // Download logo if needed
     report(35, 'Downloading logo');
+    console.log('[VideoRenderer] Step 5: Processing logo...');
     let logoPath: string | null = null;
     const logoUrl = project.bottomBanner.logoUrl || project.endScreen.logoUrl;
     if (logoUrl) {
       logoPath = path.join(workDir, 'logo.png');
       try {
-        await downloadFile(logoUrl, logoPath);
-        console.log(`[VideoRenderer] Downloaded logo: ${logoUrl}`);
+        console.log(`[VideoRenderer] Downloading logo from: ${logoUrl}`);
+        await downloadAndConvertLogo(logoUrl, logoPath);
+        console.log('[VideoRenderer] ✓ Logo downloaded and converted');
       } catch (err) {
-        console.warn('[VideoRenderer] Logo download failed, continuing without logo:', err);
+        console.warn('[VideoRenderer] ⚠ Logo download/conversion failed, continuing without logo:', err);
         logoPath = null;
       }
+    } else {
+      console.log('[VideoRenderer] No logo URL provided, skipping');
     }
 
-    // Use Speaktor-generated voice or generate TTS
+    // Use pre-generated voice or generate TTS on-the-fly
     report(40, 'Processing voice');
+    console.log('[VideoRenderer] Step 6: Processing voiceover...');
     let ttsPath: string | null = null;
     if (project.voice.enabled) {
-      if (project.voice.audioPath) {
-        // Use Speaktor-generated audio from frontend
-        const speaktorPath = path.join(process.cwd(), 'public', project.voice.audioPath);
-        if (fs.existsSync(speaktorPath)) {
-          ttsPath = speaktorPath;
-          console.log(`[VideoRenderer] Using Speaktor-generated voiceover: ${ttsPath}`);
-        } else {
-          console.warn(`[VideoRenderer] Speaktor audio not found: ${speaktorPath}`);
-        }
+      // Check if audio was pre-generated during project creation
+      if (project.voice.audioPath && fs.existsSync(project.voice.audioPath)) {
+        console.log(`[VideoRenderer] ✓ Using pre-generated voiceover: ${project.voice.audioPath}`);
+        ttsPath = project.voice.audioPath;
       } else if (project.voice.script) {
-        // Fallback to old TTS system
-        ttsPath = path.join(audioDir, 'voice.wav');
-        await generateTTS(project.voice, ttsPath);
+        // Fallback: Generate on-the-fly if not pre-generated
+        console.log('[VideoRenderer] Generating TTS from script (fallback)...');
+        ttsPath = await generateTTS(project.voice.script, project.voice.voice);
         
-        // Check if file was actually created
-        if (!fs.existsSync(ttsPath)) {
+        if (ttsPath && fs.existsSync(ttsPath)) {
+          console.log('[VideoRenderer] ✓ TTS generated successfully');
+        } else {
+          console.warn('[VideoRenderer] ⚠ TTS generation failed');
           ttsPath = null;
         }
       }
+    } else {
+      console.log('[VideoRenderer] Voice disabled, skipping');
     }
 
     // Render video with FFmpeg
     report(50, 'Rendering video');
+    console.log('[VideoRenderer] Step 7: Starting FFmpeg render...');
+    console.log(`[VideoRenderer] Output path: ${outputPath}`);
     await renderWithFFmpeg(project, allSlides, workDir, imagesDir, qrPath, logoPath, ttsPath, outputPath, resolution, report);
+    console.log('[VideoRenderer] ✓ FFmpeg render completed');
 
     // Cleanup
     report(95, 'Cleaning up');
+    console.log('[VideoRenderer] Step 8: Cleanup...');
     setTimeout(() => {
       fs.rmSync(workDir, { recursive: true, force: true });
       console.log(`[VideoRenderer] Cleaned up working directory: ${workDir}`);
     }, 5 * 60 * 1000); // Clean up after 5 minutes
 
     report(100, 'Complete');
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[VideoRenderer] ===== RENDER COMPLETE ===== (${duration}s)`);
   } catch (error) {
-    console.error('[VideoRenderer] Rendering failed:', error);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.error(`[VideoRenderer] ===== RENDER FAILED ===== (${duration}s)`);
+    console.error('[VideoRenderer] Error details:', error);
+    console.error('[VideoRenderer] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     throw error;
   }
 }
@@ -143,15 +174,20 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
  * Download images for slides
  */
 async function downloadImages(slides: any[], outputDir: string): Promise<void> {
+  console.log(`[VideoRenderer] Processing ${slides.length} slides:`);
+  slides.forEach((s, i) => {
+    console.log(`  [${i}]: ${s.imageUrl || '(blank)'} ${s.isEndScreen ? '[END SCREEN]' : ''}`);
+  });
+
   const downloads = slides.map(async (slide, index) => {
     const fileName = `slide_${index}.jpg`;
     const filePath = path.join(outputDir, fileName);
 
     try {
-      // Skip if file already exists (cache)
+      // Always remove old file to avoid using stale cache when slides change
       if (fs.existsSync(filePath)) {
-        console.log(`[VideoRenderer] Using cached slide ${index}: ${filePath}`);
-        return;
+        fs.unlinkSync(filePath);
+        console.log(`[VideoRenderer] Removed old cached file for slide ${index}`);
       }
 
       // Handle end screen slide (no image URL)
@@ -162,90 +198,103 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
         return;
       }
 
-      // Check if file is a local upload (starts with / indicating public folder)
-      if (slide.imageUrl.startsWith('/')) {
-        // This is an uploaded file in public folder, copy it instead of downloading
+      // Check if this is an uploaded file (local file)
+      if (slide.imageUrl.startsWith('/studio/images/')) {
+        // This is an uploaded file, copy it instead of downloading
         const publicPath = path.join(process.cwd(), 'public', slide.imageUrl);
+        console.log(`[VideoRenderer] Checking for uploaded file at: ${publicPath}`);
         if (fs.existsSync(publicPath)) {
           fs.copyFileSync(publicPath, filePath);
-          console.log(`[VideoRenderer] Copied uploaded slide ${index}: ${slide.imageUrl}`);
+          console.log(`[VideoRenderer] ✓ Copied uploaded slide ${index}: ${slide.imageUrl}`);
           return;
         } else {
-          console.warn(`[VideoRenderer] Local file not found: ${publicPath}`);
+          console.error(`[VideoRenderer] ✗ Uploaded file not found: ${publicPath}`);
+          throw new Error(`Uploaded file not found: ${slide.imageUrl}`);
         }
       }
       
-      // Check for file:// protocol (uploaded files)
-      if (slide.imageUrl.startsWith('file://')) {
-        const localPath = slide.imageUrl.replace('file://', '');
-        if (fs.existsSync(localPath)) {
-          fs.copyFileSync(localPath, filePath);
-          console.log(`[VideoRenderer] Copied file:// slide ${index}: ${localPath}`);
-          return;
-        }
-      }
-      
-      // Download external URL (scraped images)
+      // Download from URL
       console.log(`[VideoRenderer] Downloading slide ${index} from: ${slide.imageUrl}`);
       await downloadFile(slide.imageUrl, filePath);
-      console.log(`[VideoRenderer] Downloaded slide ${index}: ${slide.imageUrl}`);
-      
-      // Verify the downloaded file exists and has content
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Downloaded file does not exist: ${filePath}`);
-      }
-      const stats = fs.statSync(filePath);
-      if (stats.size === 0) {
-        throw new Error(`Downloaded file is empty: ${filePath}`);
-      }
-      console.log(`[VideoRenderer] Verified slide ${index}: ${stats.size} bytes`);
-      
+      console.log(`[VideoRenderer] ✓ Downloaded slide ${index}`);
     } catch (err) {
-      console.error(`[VideoRenderer] Failed to process slide ${index} (${slide.imageUrl}):`, err);
-      // Create a fallback placeholder image instead of failing
-      try {
-        await createBlankImage(filePath, 1920, 1080, '#333333');
-        console.warn(`[VideoRenderer] Created placeholder for failed slide ${index}`);
-      } catch (fallbackErr) {
-        console.error(`[VideoRenderer] Failed to create placeholder for slide ${index}:`, fallbackErr);
-        throw new Error(`Failed to download image and create placeholder: ${slide.imageUrl}`);
-      }
+      console.error(`[VideoRenderer] ✗ Failed to process slide ${index}:`, err);
+      throw new Error(`Failed to process image at index ${index}: ${slide.imageUrl}`);
     }
   });
 
   await Promise.all(downloads);
+  console.log(`[VideoRenderer] ✓ All ${slides.length} slides processed successfully`);
 }
 
 /**
- * Create a blank colored image using FFmpeg
+ * Create a blank colored image using Sharp (more reliable than FFmpeg)
  */
-function createBlankImage(outputPath: string, width: number, height: number, color: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', [
-      '-f', 'lavfi',
-      '-i', `color=c=${color}:s=${width}x${height}:d=1`,
-      '-frames:v', '1',
-      '-y',
-      outputPath
-    ]);
-
-    let stderr = '';
-    ffmpeg.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    ffmpeg.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`FFmpeg failed to create blank image: ${stderr}`));
+async function createBlankImage(outputPath: string, width: number, height: number, color: string): Promise<void> {
+  console.log(`[VideoRenderer] Creating blank image: ${outputPath} (${width}x${height}, ${color})`);
+  
+  try {
+    // Convert hex color to RGB
+    const hex = color.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    
+    // Create blank image with sharp
+    await sharp({
+      create: {
+        width,
+        height,
+        channels: 3,
+        background: { r, g, b }
       }
-    });
+    })
+    .jpeg({ quality: 90 })
+    .toFile(outputPath);
+    
+    console.log(`[VideoRenderer] ✓ Blank image created successfully`);
+  } catch (err) {
+    throw new Error(`Failed to create blank image: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
-    ffmpeg.on('error', (err) => {
-      reject(new Error(`FFmpeg spawn error: ${err.message}`));
-    });
-  });
+/**
+ * Download and convert logo (handles SVG to PNG conversion)
+ */
+async function downloadAndConvertLogo(url: string, outputPath: string): Promise<void> {
+  const tempPath = outputPath + '.temp';
+  
+  try {
+    // Download to temp file first
+    await downloadFile(url, tempPath);
+    
+    // Check if it's an SVG file
+    const isSvg = url.toLowerCase().endsWith('.svg') || 
+                  (fs.existsSync(tempPath) && fs.readFileSync(tempPath, 'utf8').includes('<svg'));
+    
+    if (isSvg) {
+      console.log('[VideoRenderer] Converting SVG logo to PNG...');
+      // SVG detected - skip it entirely to avoid FFmpeg errors
+      // Most websites work fine without logos in the banner
+      fs.unlinkSync(tempPath);
+      throw new Error('SVG logos not supported - skipping logo overlay');
+    } else {
+      // Regular image - convert to PNG using sharp for consistency
+      const sharp = (await import('sharp')).default;
+      await sharp(tempPath)
+        .resize(200, 200, { fit: 'inside', withoutEnlargement: true })
+        .png()
+        .toFile(outputPath);
+      fs.unlinkSync(tempPath);
+      console.log('[VideoRenderer] Logo converted to PNG successfully');
+    }
+  } catch (error) {
+    // Clean up temp file
+    if (fs.existsSync(tempPath)) {
+      fs.unlinkSync(tempPath);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -256,6 +305,19 @@ function downloadFile(url: string, outputPath: string): Promise<void> {
     const protocol = url.startsWith('https') ? https : http;
 
     const file = fs.createWriteStream(outputPath);
+    let resolved = false;
+    
+    // Timeout after 30 seconds
+    const timeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        file.close();
+        if (fs.existsSync(outputPath)) {
+          fs.unlinkSync(outputPath);
+        }
+        reject(new Error(`Download timeout after 30s: ${url}`));
+      }
+    }, 30000);
 
     const options = {
       timeout: 30000,
@@ -272,16 +334,26 @@ function downloadFile(url: string, outputPath: string): Promise<void> {
       if (response.statusCode === 301 || response.statusCode === 302) {
         const redirectUrl = response.headers.location;
         if (redirectUrl) {
+          clearTimeout(timeoutId);
+          if (resolved) return;
+          resolved = true;
           file.close();
-          fs.unlinkSync(outputPath);
+          if (fs.existsSync(outputPath)) {
+            fs.unlinkSync(outputPath);
+          }
           downloadFile(redirectUrl, outputPath).then(resolve).catch(reject);
           return;
         }
       }
 
       if (response.statusCode !== 200) {
+        clearTimeout(timeoutId);
+        if (resolved) return;
+        resolved = true;
         file.close();
-        fs.unlinkSync(outputPath);
+        if (fs.existsSync(outputPath)) {
+          fs.unlinkSync(outputPath);
+        }
         reject(new Error(`HTTP ${response.statusCode} for ${url}`));
         return;
       }
@@ -289,15 +361,26 @@ function downloadFile(url: string, outputPath: string): Promise<void> {
       response.pipe(file);
 
       file.on('finish', () => {
+        clearTimeout(timeoutId);
+        if (resolved) return;
+        resolved = true;
         file.close();
         resolve();
       });
 
       file.on('error', (err) => {
-        fs.unlinkSync(outputPath);
+        clearTimeout(timeoutId);
+        if (resolved) return;
+        resolved = true;
+        if (fs.existsSync(outputPath)) {
+          fs.unlinkSync(outputPath);
+        }
         reject(err);
       });
     }).on('error', (err) => {
+      clearTimeout(timeoutId);
+      if (resolved) return;
+      resolved = true;
       if (file) {
         file.close();
         if (fs.existsSync(outputPath)) {
@@ -344,15 +427,30 @@ async function renderWithFFmpeg(
   console.log('[VideoRenderer] Slides:', allSlides.map((s, i) => `${i}: ${s.imageUrl || 'BLANK'} (${s.startTime}s-${s.endTime}s) ${s.isEndScreen ? '[END]' : ''}`).join(', '));
 
   // Input: images with loop and duration
+  // IMPORTANT: For xfade transitions to work, each clip (except the last) needs to be extended
+  // by the transition duration so there's overlap for the crossfade
+  // CRITICAL: Transition duration MUST be less than slide duration (3s) to avoid negative offsets
+  const transitionDuration = 0.8; // Standard transition duration
+  console.log(`[VideoRenderer] Transition duration: ${transitionDuration}s per transition`);
+  console.log(`[VideoRenderer] Processing ${allSlides.length} slides with timings:`);
+  allSlides.forEach((slide, idx) => {
+    console.log(`  Slide ${idx}: ${slide.startTime}s → ${slide.endTime}s (duration: ${slide.endTime - slide.startTime}s)${slide.isEndScreen ? ' [END SCREEN]' : ''}`);
+  });
+  
   let inputIndex = 0;
   allSlides.forEach((slide, slideIndex) => {
     const imagePath = path.join(imagesDir, `slide_${slideIndex}.jpg`);
-    const duration = slide.endTime - slide.startTime;
+    const baseDuration = slide.endTime - slide.startTime;
+    
+    // Extend duration for all slides except the last to allow for transition overlap
+    const duration = slideIndex < allSlides.length - 1 
+      ? baseDuration + transitionDuration 
+      : baseDuration;
 
     args.push('-loop', '1');
     args.push('-t', duration.toString());
     args.push('-i', imagePath);
-    console.log(`[VideoRenderer] Input ${slideIndex}: ${imagePath} (duration: ${duration}s)`);
+    console.log(`[VideoRenderer] Input ${slideIndex}: ${imagePath} (base: ${baseDuration}s, extended: ${duration}s)`);
     inputIndex++;
   });
 
@@ -398,30 +496,143 @@ async function renderWithFFmpeg(
   // Build filter complex
   const filterParts: string[] = [];
 
-  // Scale and pad images (use allSlides which includes end screen)
+  // Scale, pad, and apply motion graphics to images (Ken Burns effect)
   allSlides.forEach((slide, i) => {
-    filterParts.push(
-      `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
+    let filterChain = `[${i}:v]`;
+    
+    // Apply motion graphics (zoompan) before scaling if enabled
+    if (slide.motion && slide.motion.type !== 'none' && !slide.isEndScreen) {
+      const fps = 25; // Frame rate
+      const duration = slide.endTime - slide.startTime;
+      const frames = Math.floor(duration * fps);
+      const intensity = (slide.motion.intensity || 5) / 10; // Convert 1-10 to 0.1-1.0
+      
+      switch (slide.motion.type) {
+        case 'zoom-in':
+          // Zoom from 100% to 105%
+          filterChain += `zoompan=z='min(zoom+${0.0015 * intensity},1.05)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height},`;
+          break;
+        case 'zoom-out':
+          // Zoom from 110% to 100%
+          filterChain += `zoompan=z='if(lte(zoom,1.0),1.0,max(1.0,1.1-on*${0.0015 * intensity}))':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${width}x${height},`;
+          break;
+        case 'pan-left':
+          // Pan from right to left
+          filterChain += `zoompan=z=1.1:d=${frames}:x='iw-iw/zoom-${intensity * 2}*on':y='ih/2-(ih/zoom/2)':s=${width}x${height},`;
+          break;
+        case 'pan-right':
+          // Pan from left to right
+          filterChain += `zoompan=z=1.1:d=${frames}:x='0+${intensity * 2}*on':y='ih/2-(ih/zoom/2)':s=${width}x${height},`;
+          break;
+        case 'pan-up':
+          // Pan from bottom to top
+          filterChain += `zoompan=z=1.1:d=${frames}:x='iw/2-(iw/zoom/2)':y='ih-ih/zoom-${intensity * 2}*on':s=${width}x${height},`;
+          break;
+        case 'pan-down':
+          // Pan from top to bottom
+          filterChain += `zoompan=z=1.1:d=${frames}:x='iw/2-(iw/zoom/2)':y='0+${intensity * 2}*on':s=${width}x${height},`;
+          break;
+      }
+    }
+    
+    // Apply crop if specified
+    if (slide.crop) {
+      const cropW = Math.floor(slide.crop.width * width);
+      const cropH = Math.floor(slide.crop.height * height);
+      const cropX = Math.floor(slide.crop.x * width);
+      const cropY = Math.floor(slide.crop.y * height);
+      filterChain += `crop=w=${cropW}:h=${cropH}:x=${cropX}:y=${cropY},`;
+    }
+    
+    // Scale and pad to final dimensions
+    filterChain += `scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
       `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,` +
-      `format=yuv420p,setsar=1[v${i}]`
-    );
+      `format=yuv420p,setsar=1[v${i}]`;
+    
+    filterParts.push(filterChain);
   });
 
-  // Concat all slides (simple concatenation for now)
-  const slideLabels = allSlides.map((_, i) => `[v${i}]`).join('');
-  filterParts.push(`${slideLabels}concat=n=${allSlides.length}:v=1:a=0[vconcat]`);
+  // Apply xfade transitions between slides
+  if (allSlides.length > 1) {
+    // transitionDuration already defined at top of function (0.8)
+    console.log(`[VideoRenderer] Applying xfade transitions (${transitionDuration}s duration)...`);
+    
+    // Map transition names to xfade types
+    const getXfadeType = (transition?: string): string => {
+      const mapping: Record<string, string> = {
+        'fade': 'fade',
+        'slideup': 'slideup',
+        'slidedown': 'slidedown',
+        'slideleft': 'slideleft',
+        'slideright': 'slideright',
+        'zoomin': 'fade', // xfade doesn't have zoom, use fade
+        'zoomout': 'fade',
+        'wipeleft': 'wipeleft',
+        'wiperight': 'wiperight',
+        'circlecrop': 'circlecrop'
+      };
+      return mapping[transition || 'fade'] || 'fade';
+    };
+    
+    // Build xfade chain - offset is RELATIVE to current accumulated stream length
+    // Each xfade operates on the output of the previous xfade
+    let currentLabel = '[v0]';
+    let currentStreamLength = allSlides[0].endTime - allSlides[0].startTime; // First slide base duration (3s)
+    
+    for (let i = 1; i < allSlides.length; i++) {
+      const currentSlide = allSlides[i];
+      const transitionType = getXfadeType(currentSlide.transition);
+      
+      // Offset: where in the CURRENT stream (currentLabel) should the transition start
+      // We want it to start at the current accumulated stream length
+      const offset = currentStreamLength;
+      
+      console.log(`[VideoRenderer] Transition ${i}: ${transitionType} at offset ${offset.toFixed(1)}s (current stream length: ${currentStreamLength.toFixed(1)}s)`);
+      
+      // Apply xfade between accumulated stream and next slide
+      const outputLabel = i === allSlides.length - 1 ? '[vconcat]' : `[vx${i}]`;
+      filterParts.push(
+        `${currentLabel}[v${i}]xfade=transition=${transitionType}:duration=${transitionDuration}:offset=${offset}${outputLabel}`
+      );
+      
+      // Update stream length: add new slide's base duration
+      const newSlideBaseDuration = currentSlide.endTime - currentSlide.startTime;
+      currentStreamLength += newSlideBaseDuration;
+      
+      currentLabel = outputLabel;
+    }
+  } else {
+    // Single slide, no transitions needed
+    filterParts.push(`[v0]copy[vconcat]`);
+  }
 
   // Split concatenated video for end screen overlay
   // We need to apply end screen text only to the end screen portion
   const endScreenSlide = allSlides.find(s => s.isEndScreen);
   const endScreenIndex = allSlides.findIndex(s => s.isEndScreen);
-  const contentDuration = endScreenSlide ? endScreenSlide.startTime : calculateDuration(allSlides);
+  
+  // Calculate actual duration after xfade transitions
+  // Each transition creates a 0.8s overlap, so we lose 0.8s per transition
+  // transitionDuration already defined at top of function (0.8)
+  const numTransitions = allSlides.length - 1;
+  const totalDurationWithoutTransitions = calculateDuration(allSlides);
+  const actualTotalDuration = totalDurationWithoutTransitions - (numTransitions * transitionDuration);
+  
+  // Calculate content vs end screen timing
+  // The end screen is the LAST portion of the video, not separate
   const endScreenDuration = endScreenSlide ? (endScreenSlide.endTime - endScreenSlide.startTime) : 0;
+  
+  // After transitions, the end screen still takes its original duration (minus any transition overlap)
+  // But since it's the last slide, it only loses overlap on the FRONT (not the back)
+  const adjustedEndScreenDuration = endScreenDuration; // 3s
+  const contentDuration = actualTotalDuration - adjustedEndScreenDuration;
+  
+  console.log(`[VideoRenderer] Timeline: total=${actualTotalDuration}s, content=${contentDuration}s, endscreen=${adjustedEndScreenDuration}s`);
 
   let videoStream = '[vconcat]';
 
   // Add end screen text overlay if enabled
-  if (project.endScreen.enabled && endScreenSlide && project.endScreen.type === 'text' && project.endScreen.content) {
+  if (project.endScreen.enabled && endScreenSlide && project.endScreen.type === 'text') {
     // Split video: content part and end screen part
     filterParts.push(`[vconcat]split=2[vcontent][vendscreen]`);
     
@@ -430,49 +641,74 @@ async function renderWithFFmpeg(
       filterParts.push(`[vcontent]trim=end=${contentDuration},setpts=PTS-STARTPTS[vcontentfinal]`);
     }
     
-    // Trim end screen part and add text overlay
+    // Trim end screen part
     filterParts.push(`[vendscreen]trim=start=${contentDuration},setpts=PTS-STARTPTS[vendtrim]`);
     
-    // Write end screen text to file
-    const endTextPath = path.join(workDir, 'endscreen_text.txt');
-    fs.writeFileSync(endTextPath, project.endScreen.content, 'utf-8');
-    const endTextFile = endTextPath
-      .replace(/\\/g, '/')
-      .replace(/:/g, '\\\\:')
-      .replace(/ /g, '\\\\ ');
+    // Write text to files to avoid FFmpeg escaping issues
+    let currentStream = '[vendtrim]';
     
-    // Add text overlay to end screen with logo if available
-    if (logoInputIndex !== null && project.endScreen.logoUrl) {
-      // Scale logo for end screen
-      filterParts.push(`[${logoInputIndex}:v]scale=-1:120[endlogo]`);
-      
-      // Overlay logo at top left
-      filterParts.push(`[vendtrim][endlogo]overlay=80:80[vendlogo]`);
-      
-      // Add business title at top center
-      const titleTextPath = path.join(workDir, 'endscreen_title.txt');
-      fs.writeFileSync(titleTextPath, project.business.title, 'utf-8');
-      const titleTextFile = titleTextPath
+    // White background
+    filterParts.push(`${currentStream}drawbox=x=0:y=0:w=${width}:h=${height}:color=#FFFFFF:t=fill[vendbg]`);
+    currentStream = '[vendbg]';
+    
+    // Company name at top center
+    if (project.endScreen.companyName && project.endScreen.companyName.trim()) {
+      const companyNamePath = path.join(workDir, 'endscreen_company.txt');
+      fs.writeFileSync(companyNamePath, project.endScreen.companyName, 'utf-8');
+      const companyNameFile = companyNamePath
         .replace(/\\/g, '/')
         .replace(/:/g, '\\\\:')
         .replace(/ /g, '\\\\ ');
       
       filterParts.push(
-        `[vendlogo]drawtext=textfile=${titleTextFile}:fontsize=56:fontcolor=${project.endScreen.textColor}:` +
-        `x=(w-text_w)/2:y=100[vendtitle]`
+        `${currentStream}drawtext=textfile=${companyNameFile}:fontsize=72:fontcolor=${project.endScreen.textColor}:` +
+        `x=(w-text_w)/2:y=120[vendcompany]`
       );
+      currentStream = '[vendcompany]';
+    }
+    
+    // Phone number in center
+    if (project.endScreen.phoneNumber && project.endScreen.phoneNumber.trim()) {
+      const phoneNumberPath = path.join(workDir, 'endscreen_phone.txt');
+      fs.writeFileSync(phoneNumberPath, project.endScreen.phoneNumber, 'utf-8');
+      const phoneNumberFile = phoneNumberPath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\\\:')
+        .replace(/ /g, '\\\\ ');
       
-      // Add main content text at center
       filterParts.push(
-        `[vendtitle]drawtext=textfile=${endTextFile}:fontsize=48:fontcolor=${project.endScreen.textColor}:` +
-        `x=(w-text_w)/2:y=(h-text_h)/2[vendfinal]`
+        `${currentStream}drawtext=textfile=${phoneNumberFile}:fontsize=140:fontcolor=${project.endScreen.phoneNumberColor}:` +
+        `x=(w-text_w)/2:y=(h-text_h)/2:fontfile=/Windows/Fonts/arialbd.ttf[vendphone]`
       );
+      currentStream = '[vendphone]';
+    }
+    
+    // Website link at bottom center
+    if (project.endScreen.websiteLink && project.endScreen.websiteLink.trim()) {
+      const websiteLinkPath = path.join(workDir, 'endscreen_link.txt');
+      fs.writeFileSync(websiteLinkPath, `🔗 ${project.endScreen.websiteLink}`, 'utf-8');
+      const websiteLinkFile = websiteLinkPath
+        .replace(/\\/g, '/')
+        .replace(/:/g, '\\\\:')
+        .replace(/ /g, '\\\\ ');
+      
+      filterParts.push(
+        `${currentStream}drawtext=textfile=${websiteLinkFile}:fontsize=48:fontcolor=${project.endScreen.textColor}:` +
+        `x=(w-text_w)/2:y=h-180[vendlink]`
+      );
+      currentStream = '[vendlink]';
+    }
+    
+    // Add logo overlay if available (top-left corner)
+    if (logoInputIndex !== null && project.endScreen.logoUrl) {
+      // Scale logo for end screen
+      filterParts.push(`[${logoInputIndex}:v]scale=-1:100[endlogo]`);
+      
+      // Overlay logo at top left
+      filterParts.push(`${currentStream}[endlogo]overlay=60:60[vendfinal]`);
     } else {
-      // No logo, just centered text
-      filterParts.push(
-        `[vendtrim]drawtext=textfile=${endTextFile}:fontsize=64:fontcolor=${project.endScreen.textColor}:` +
-        `x=(w-text_w)/2:y=(h-text_h)/2[vendfinal]`
-      );
+      // No logo, rename current stream to vendfinal
+      filterParts.push(`${currentStream}copy[vendfinal]`);
     }
     
     // Concatenate content and end screen parts back together
@@ -493,7 +729,7 @@ async function renderWithFFmpeg(
 
   // Add banner overlay
   if (project.bottomBanner.enabled && project.bottomBanner.text) {
-    const bannerHeight = 120;  // Increased height for better layout
+    const bannerHeight = 80;
     const y = project.bottomBanner.position === 'bottom' ? height - bannerHeight : 0;
     
     // Write text to file to avoid FFmpeg escaping issues
@@ -504,50 +740,28 @@ async function renderWithFFmpeg(
       .replace(/:/g, '\\\\:')
       .replace(/ /g, '\\\\ ');
     
-    // Add logo if available (using logo input)
     if (logoInputIndex !== null && project.bottomBanner.logoUrl) {
-      // Scale logo for banner (70px height)
-      filterParts.push(`[${logoInputIndex}:v]scale=-1:70[bannerlogo]`);
-      
-      // Draw semi-transparent banner box on current video stream
+      // Draw banner with logo
       filterParts.push(
-        `${videoStream}drawbox=x=0:y=${y}:w=${width}:h=${bannerHeight}:color=${project.bottomBanner.backgroundColor}@0.85:t=fill[vtemp1]`
+        `${videoStream}drawbox=x=0:y=${y}:w=${width}:h=${bannerHeight}:color=${project.bottomBanner.backgroundColor}@0.8:t=fill[vtemp1]`
       );
-      
-      // Overlay logo on left side with padding
+      filterParts.push(`[${logoInputIndex}:v]scale=-1:60[bannerlogo]`);
       filterParts.push(
-        `[vtemp1][bannerlogo]overlay=40:${y + 25}:shortest=1[vtemp2]`
+        `[vtemp1][bannerlogo]overlay=20:${y + 10}:shortest=1[vtemp2]`
       );
-      
-      // Add business name on left (next to logo) using textfile
-      const bannerNamePath = path.join(workDir, 'banner_name.txt');
-      fs.writeFileSync(bannerNamePath, project.business.title, 'utf-8');
-      const bannerNameFile = bannerNamePath
-        .replace(/\\/g, '/')
-        .replace(/:/g, '\\\\:')
-        .replace(/ /g, '\\\\ ');
-      
       filterParts.push(
-        `[vtemp2]drawtext=textfile=${bannerNameFile}:fontsize=28:fontcolor=${project.bottomBanner.textColor}:` +
-        `x=140:y=${y + 25}[vtemp3]`
-      );
-      
-      // Add phone/contact text on the right side (larger)
-      filterParts.push(
-        `[vtemp3]drawtext=textfile=${bannerTextFile}:fontsize=36:fontcolor=${project.bottomBanner.textColor}:` +
-        `x=w-text_w-40:y=${y + (bannerHeight/2 - 18)}[vwithbanner]`
+        `[vtemp2]drawtext=textfile=${bannerTextFile}:fontsize=${project.bottomBanner.fontSize}:fontcolor=${project.bottomBanner.textColor}:x=w-text_w-20:y=${y + bannerHeight/2}[vwithbanner]`
       );
     } else {
-      // No logo, just draw box and centered text on current video stream
+      // Draw banner without logo
       filterParts.push(
-        `${videoStream}drawbox=x=0:y=${y}:w=${width}:h=${bannerHeight}:color=${project.bottomBanner.backgroundColor}@0.85:t=fill,` +
+        `${videoStream}drawbox=x=0:y=${y}:w=${width}:h=${bannerHeight}:color=${project.bottomBanner.backgroundColor}@0.8:t=fill,` +
         `drawtext=textfile=${bannerTextFile}:fontsize=${project.bottomBanner.fontSize}:fontcolor=${project.bottomBanner.textColor}:x=(w-text_w)/2:y=${y + bannerHeight/2}[vwithbanner]`
       );
     }
     
     videoStream = '[vwithbanner]';
   } else {
-    // No banner, just pass through current stream
     filterParts.push(`${videoStream}copy[vwithbanner]`);
     videoStream = '[vwithbanner]';
   }
@@ -555,8 +769,8 @@ async function renderWithFFmpeg(
   // Add QR overlay
   if (qrInputIndex !== null && project.qrCode.enabled) {
     const padding = 20;
-    let x = width - project.qrCode.size - padding;  // Default top-right
-    let y = padding;  // Default top
+    let x = width - project.qrCode.size - padding;
+    let y = padding;
 
     if (project.qrCode.position === 'top-left') {
       x = padding;
@@ -568,7 +782,6 @@ async function renderWithFFmpeg(
       x = padding;
       y = height - project.qrCode.size - padding;
     }
-    // top-right is default (x already set)
     
     filterParts.push(`[${qrInputIndex}:v]scale=${project.qrCode.size}:${project.qrCode.size}[qrscaled]`);
     filterParts.push(`${videoStream}[qrscaled]overlay=${x}:${y}:shortest=1[vout]`);
@@ -576,22 +789,22 @@ async function renderWithFFmpeg(
     filterParts.push(`${videoStream}null[vout]`);
   }
 
-  // Audio filter (use allSlides which already includes end screen)
-  const totalDuration = calculateDuration(allSlides);
+  // Audio filter - use actual duration after transitions (already calculated above)
+  console.log(`[VideoRenderer] Audio duration: ${actualTotalDuration}s (raw: ${totalDurationWithoutTransitions}s, ${numTransitions} transitions)`);
   
   const audioFilter = buildAudioFilter(
     project.music,
     project.voice,
     musicInputIndex,
     ttsInputIndex,
-    totalDuration
+    actualTotalDuration
   );
 
   if (audioFilter) {
     filterParts.push(audioFilter);
   } else {
     // Add silent audio track for proper duration metadata
-    filterParts.push(`anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${totalDuration}[aout]`);
+    filterParts.push(`anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${actualTotalDuration}[aout]`);
   }
 
   args.push('-filter_complex', filterParts.join(';'));
@@ -630,7 +843,11 @@ async function renderWithFFmpeg(
     let stderr = '';
     let lastProgress = -1;
     let progressTimeout: NodeJS.Timeout;
-    let lastProgressTime = Date.now();
+    
+    // Calculate actual duration for progress tracking
+    // transitionDuration already defined at top of function (0.8)
+    const numTransitions = allSlides.length - 1;
+    const actualDuration = calculateDuration(allSlides) - (numTransitions * transitionDuration);
     
     // Timeout if no progress for 60 seconds
     const resetProgressTimeout = () => {
@@ -659,12 +876,12 @@ async function renderWithFFmpeg(
         const minutes = parseInt(timeMatch[2]);
         const seconds = parseInt(timeMatch[3]);
         const currentTime = hours * 3600 + minutes * 60 + seconds;
-        const progress = Math.min(95, 50 + Math.floor((currentTime / totalDuration) * 45));
+        const progress = Math.min(95, 50 + Math.floor((currentTime / actualTotalDuration) * 45));
         
         if (progress !== lastProgress) {
           lastProgress = progress;
           onProgress(progress, 'Rendering video');
-          console.log(`[VideoRenderer] Progress: ${progress}% (${currentTime}s / ${totalDuration}s)`);
+          console.log(`[VideoRenderer] Progress: ${progress}% (${currentTime}s / ${actualTotalDuration}s)`);
         }
       }
     });

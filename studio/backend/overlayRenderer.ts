@@ -89,18 +89,58 @@ export function generateEndScreenFilter(
   if (!endScreen.enabled) return null;
 
   if (endScreen.type === 'text') {
-    // Escape text
-    const escapedText = endScreen.content
-      .replace(/\\/g, '\\\\')
-      .replace(/'/g, "\\'")
-      .replace(/:/g, '\\:')
-      .replace(/\n/g, '\\n');
+    const filters: string[] = [];
+    
+    // White background (always white for this design)
+    filters.push(`drawbox=x=0:y=0:w=${videoWidth}:h=${videoHeight}:color=#FFFFFF:t=fill`);
+    
+    // Company name at top center (e.g., "SAPPHIRE")
+    if (endScreen.companyName && endScreen.companyName.trim()) {
+      const companyNameEscaped = endScreen.companyName
+        .replace(/\\/g, '\\\\\\\\')
+        .replace(/'/g, "\\\\'")
+        .replace(/:/g, '\\\\:');
+      
+      filters.push(
+        `drawtext=text='${companyNameEscaped}':fontsize=72:fontcolor=${endScreen.textColor}:` +
+        `x=(w-text_w)/2:y=120:font=Arial:fontfile=/Windows/Fonts/arial.ttf`
+      );
+    }
+    
+    // Phone number in large orange text (center of screen)
+    if (endScreen.phoneNumber && endScreen.phoneNumber.trim()) {
+      const phoneEscaped = endScreen.phoneNumber
+        .replace(/\\/g, '\\\\\\\\')
+        .replace(/'/g, "\\\\'")
+        .replace(/:/g, '\\\\:');
+      
+      filters.push(
+        `drawtext=text='${phoneEscaped}':fontsize=140:fontcolor=${endScreen.phoneNumberColor}:` +
+        `x=(w-text_w)/2:y=(h-text_h)/2:font=Arial Bold:fontfile=/Windows/Fonts/arialbd.ttf`
+      );
+    }
+    
+    // Website link at bottom center with chain icon
+    if (endScreen.websiteLink && endScreen.websiteLink.trim()) {
+      const linkEscaped = endScreen.websiteLink
+        .replace(/\\/g, '\\\\\\\\')
+        .replace(/'/g, "\\\\'")
+        .replace(/:/g, '\\\\:');
+      
+      // Chain icon (🔗) + website link
+      const linkText = `🔗 ${linkEscaped}`;
+      const linkTextEscaped = linkText
+        .replace(/\\/g, '\\\\\\\\')
+        .replace(/'/g, "\\\\'")
+        .replace(/:/g, '\\\\:');
+      
+      filters.push(
+        `drawtext=text='${linkTextEscaped}':fontsize=48:fontcolor=${endScreen.textColor}:` +
+        `x=(w-text_w)/2:y=h-180:font=Arial:fontfile=/Windows/Fonts/arial.ttf`
+      );
+    }
 
-    // Background + centered text
-    const bgFilter = `drawbox=x=0:y=0:w=${videoWidth}:h=${videoHeight}:color=${endScreen.backgroundColor}:t=fill`;
-    const textFilter = `drawtext=text='${escapedText}':fontsize=64:fontcolor=${endScreen.textColor}:x=(w-text_w)/2:y=(h-text_h)/2`;
-
-    return `${bgFilter},${textFilter}`;
+    return filters.join(',');
   } else if (endScreen.type === 'image') {
     // Will be handled as a separate input
     return null;
