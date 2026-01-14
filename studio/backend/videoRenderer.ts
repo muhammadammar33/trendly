@@ -155,8 +155,25 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
     report(95, 'Cleaning up');
     console.log('[VideoRenderer] Step 8: Cleanup...');
     setTimeout(() => {
-      fs.rmSync(workDir, { recursive: true, force: true });
-      console.log(`[VideoRenderer] Cleaned up working directory: ${workDir}`);
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+        console.log(`[VideoRenderer] Cleaned up working directory: ${workDir}`);
+      } catch (cleanupError: any) {
+        if (cleanupError.code === 'EBUSY' || cleanupError.code === 'EPERM') {
+          console.log(`[VideoRenderer] Could not clean up ${workDir} (files locked), will retry later`);
+          // Retry after 10 minutes
+          setTimeout(() => {
+            try {
+              fs.rmSync(workDir, { recursive: true, force: true });
+              console.log(`[VideoRenderer] Successfully cleaned up ${workDir} on retry`);
+            } catch (retryError: any) {
+              console.log(`[VideoRenderer] Cleanup retry failed (${retryError.code}), giving up`);
+            }
+          }, 10 * 60 * 1000);
+        } else {
+          console.error(`[VideoRenderer] Cleanup error:`, cleanupError);
+        }
+      }
     }, 5 * 60 * 1000); // Clean up after 5 minutes
 
     report(100, 'Complete');
