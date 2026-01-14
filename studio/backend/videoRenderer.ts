@@ -185,40 +185,34 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
     const filePath = path.join(outputDir, fileName);
 
     try {
-      // Always remove old file to avoid using stale cache when slides change
+      // Remove old file to avoid stale cache (with retry for Windows file locks)
       if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log(`[VideoRenderer] Removed old cached file for slide ${index}`);
-      }
-
-      // Handle end screen slide (no image URL)
-      if (slide.isEndScreen || !slide.imageUrl || slide.imageUrl === '') {
-        // Create a blank colored image for end screen
-        console.log(`[VideoRenderer] About to create blank image for slide ${index}...`);
-        await createBlankImage(filePath, 1920, 1080, '#1a1a2e');
-        console.log(`[VideoRenderer] Created blank end screen slide ${index}`);
-        return;
-      }
-
-      // Check if this is an uploaded file (local file)
-      if (slide.imageUrl.startsWith('/studio/images/')) {
-        // This is an uploaded file, copy it instead of downloading
-        const publicPath = path.join(process.cwd(), 'public', slide.imageUrl);
-        console.log(`[VideoRenderer] Checking for uploaded file at: ${publicPath}`);
-        if (fs.existsSync(publicPath)) {
-          fs.copyFileSync(publicPath, filePath);
-          console.log(`[VideoRenderer] ✓ Copied uploaded slide ${index}: ${slide.imageUrl}`);
-          return;
-        } else {
-          console.error(`[VideoRenderer] ✗ Uploaded file not found: ${publicPath}`);
-          throw new Error(`Uploaded file not found: ${slide.imageUrl}`);
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            fs.unlinkSync(filePath);
+            console.log(`[VideoRenderer] Removed old cached file for slide ${index}`);
+            break;
+          } catch (unlinkError: any) {
+            if (unlinkError.code === 'EBUSY' && retries > 1) {
+              console.log(`[VideoRenderer] File locked, retrying... (${retries - 1} attempts left)`);
+              await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms
+              retries--;
+            } else if (unlinkError.code === 'EBUSY') {
+              // File is locked, use a different filename
+              const timestamp = Date.now();
+              const newFileName = `slide_${index}_${timestamp}.jpg`;
+              const newFilePath = path.join(outputDir, newFileName);
+              console.log(`[VideoRenderer] File locked, using new name: ${newFileName}`);
+              return await processSlideImage(slide, index, newFilePath);
+            } else {
+              throw unlinkError;
+            }
+          }
         }
       }
-      
-      // Download from URL
-      console.log(`[VideoRenderer] Downloading slide ${index} from: ${slide.imageUrl}`);
-      await downloadFile(slide.imageUrl, filePath);
-      console.log(`[VideoRenderer] ✓ Downloaded slide ${index}`);
+
+      return await processSlideImage(slide, index, filePath);
     } catch (err) {
       console.error(`[VideoRenderer] ✗ Failed to process slide ${index}:`, err);
       console.error(`[VideoRenderer] Error details:`, {
@@ -229,6 +223,60 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
       throw new Error(`Failed to process image at index ${index}: ${slide.imageUrl}`);
     }
   });
+
+  // Helper function to process a single slide image
+  async function processSlideImage(slide: any, index: number, filePath: string) {
+    // Handle end screen slide (no image URL)
+    if (slide.isEndScreen || !slide.imageUrl || slide.imageUrl === '') {
+      // Create a blank colored image for end screen
+      console.log(`[VideoRenderer] About to create blank image for slide ${index}...`);
+      await createBlankImage(filePath, 1920, 1080, '#1a1a2e');
+      console.log(`[VideoRenderer] Created blank end screen slide ${index}`);
+      return filePath;
+    }
+
+    // Check if this is an uploaded file (local file)
+    if (slide.imageUrl.startsWith('/studio/images/')) {
+      // This is an uploaded file, copy it instead of downloading
+      const publicPath = path.join(process.cwd(), 'public', slide.imageUrl);
+      console.log(`[VideoRenderer] Checking for uploaded file at: ${publicPath}`);
+      if (fs.existsSync(publicPath)) {
+        fs.copyFileSync(publicPath, filePath);
+        console.log(`[VideoRenderer] ✓ Copied uploaded slide ${index}: ${slide.imageUrl}`);
+        return filePath;
+      } else {
+        console.error(`[VideoRenderer] ✗ Uploaded file not found: ${publicPath}`);
+        throw new Error(`Uploaded file not found: ${slide.imageUrl}`);
+      }
+    }
+    
+    // Download from URL
+    console.log(`[VideoRenderer] Downloading slide ${index} from: ${slide.imageUrl}`);
+    const tempPath = filePath.replace('.jpg', '.tmp');
+    await downloadFile(slide.imageUrl, tempPath);
+    
+    // Convert to JPG using Sharp (handles webp, png, etc.)
+    console.log(`[VideoRenderer] Converting slide ${index} to JPG...`);
+    await sharp(tempPath)
+      .jpeg({ quality: 95 })
+      .toFile(filePath);
+    
+    // Remove temp file (with retry for Windows file locks)
+    if (fs.existsSync(tempPath)) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (unlinkError: any) {
+        if (unlinkError.code === 'EBUSY') {
+          console.log(`[VideoRenderer] Temp file locked, will be cleaned up later`);
+        } else {
+          console.error(`[VideoRenderer] Error removing temp file:`, unlinkError);
+        }
+      }
+    }
+    
+    console.log(`[VideoRenderer] ✓ Downloaded and converted slide ${index}`);
+    return filePath;
+  }
 
   try {
     console.log(`[VideoRenderer] Waiting for all ${downloads.length} download promises...`);
@@ -337,6 +385,7 @@ async function downloadAndConvertLogo(url: string, outputPath: string): Promise<
  */
 async function downloadFile(url: string, outputPath: string): Promise<void> {
   try {
+    console.log(`[VideoRenderer] Fetching URL: ${url}`);
     const response = await undiciFetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -348,12 +397,18 @@ async function downloadFile(url: string, outputPath: string): Promise<void> {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status} for ${url}`);
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
+    console.log(`[VideoRenderer] Response OK, content-type: ${response.headers.get('content-type')}, size: ${response.headers.get('content-length')} bytes`);
+    
     const buffer = await response.arrayBuffer();
+    console.log(`[VideoRenderer] Downloaded ${buffer.byteLength} bytes`);
+    
     fs.writeFileSync(outputPath, Buffer.from(buffer));
+    console.log(`[VideoRenderer] Wrote file to ${outputPath}`);
   } catch (error: any) {
+    console.error(`[VideoRenderer] Download error for ${url}:`, error.message);
     // Clean up partial file
     if (fs.existsSync(outputPath)) {
       fs.unlinkSync(outputPath);
