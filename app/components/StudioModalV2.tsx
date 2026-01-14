@@ -882,8 +882,29 @@ export default function StudioModalV2({
                             "Video decode error - file may be corrupted";
                           break;
                         case 4:
-                          errorMsg =
-                            "Video format not supported or file not found (404)";
+                          // 404 error - video file missing, regenerate it
+                          errorMsg = "Video file missing - regenerating...";
+                          console.log(
+                            "[Video] File not found (404), triggering re-render"
+                          );
+
+                          // Clear the broken URL and trigger re-render
+                          if (project) {
+                            setProject({
+                              ...project,
+                              previewVideoUrl: null,
+                              status: "draft",
+                            });
+
+                            // Auto-trigger preview generation
+                            setTimeout(() => {
+                              showToast(
+                                "Regenerating video preview...",
+                                "info"
+                              );
+                              handleGeneratePreview();
+                            }, 500);
+                          }
                           break;
                       }
                     }

@@ -6,6 +6,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/studio/projectStore';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export async function GET(
   request: NextRequest,
@@ -23,6 +25,22 @@ export async function GET(
         { error: 'Project not found' },
         { status: 404 }
       );
+    }
+
+    // Check if preview video exists on disk
+    if (project.previewVideoUrl) {
+      const videoPath = path.join(process.cwd(), 'public', project.previewVideoUrl);
+      const videoExists = fs.existsSync(videoPath);
+      
+      console.log(`[API] Video check: ${project.previewVideoUrl}`);
+      console.log(`[API] Video exists on disk: ${videoExists}`);
+      
+      if (!videoExists) {
+        console.warn(`[API] Video file missing, clearing URL to trigger re-render`);
+        // Clear the video URL so frontend knows to re-render
+        project.previewVideoUrl = null;
+        project.status = 'draft';
+      }
     }
 
     return NextResponse.json(project);
