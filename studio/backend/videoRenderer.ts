@@ -11,6 +11,7 @@ import * as path from 'path';
 import * as https from 'https';
 import * as http from 'http';
 import sharp from 'sharp';
+import { fetch as undiciFetch } from 'undici';
 import { buildInputList, calculateDuration, validateTimeline, normalizeTimeline, addEndScreen } from './timelineBuilder';
 import { generateBannerFilter, generateQRFilter, generateEndScreenFilter } from './overlayRenderer';
 import { generateTTS, buildAudioFilter } from './audioMixer';
@@ -298,98 +299,33 @@ async function downloadAndConvertLogo(url: string, outputPath: string): Promise<
 }
 
 /**
- * Download file from URL
+ * Download file from URL using undici for better reliability
  */
-function downloadFile(url: string, outputPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const protocol = url.startsWith('https') ? https : http;
-
-    const file = fs.createWriteStream(outputPath);
-    let resolved = false;
-    
-    // Timeout after 30 seconds
-    const timeoutId = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        file.close();
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
-        }
-        reject(new Error(`Download timeout after 30s: ${url}`));
-      }
-    }, 30000);
-
-    const options = {
-      timeout: 30000,
+async function downloadFile(url: string, outputPath: string): Promise<void> {
+  try {
+    const response = await undiciFetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
         'Accept-Encoding': 'gzip, deflate, br',
         'Referer': new URL(url).origin,
-      }
-    };
-
-    protocol.get(url, options, (response) => {
-      // Handle redirects
-      if (response.statusCode === 301 || response.statusCode === 302) {
-        const redirectUrl = response.headers.location;
-        if (redirectUrl) {
-          clearTimeout(timeoutId);
-          if (resolved) return;
-          resolved = true;
-          file.close();
-          if (fs.existsSync(outputPath)) {
-            fs.unlinkSync(outputPath);
-          }
-          downloadFile(redirectUrl, outputPath).then(resolve).catch(reject);
-          return;
-        }
-      }
-
-      if (response.statusCode !== 200) {
-        clearTimeout(timeoutId);
-        if (resolved) return;
-        resolved = true;
-        file.close();
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
-        }
-        reject(new Error(`HTTP ${response.statusCode} for ${url}`));
-        return;
-      }
-
-      response.pipe(file);
-
-      file.on('finish', () => {
-        clearTimeout(timeoutId);
-        if (resolved) return;
-        resolved = true;
-        file.close();
-        resolve();
-      });
-
-      file.on('error', (err) => {
-        clearTimeout(timeoutId);
-        if (resolved) return;
-        resolved = true;
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
-        }
-        reject(err);
-      });
-    }).on('error', (err) => {
-      clearTimeout(timeoutId);
-      if (resolved) return;
-      resolved = true;
-      if (file) {
-        file.close();
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
-        }
-      }
-      reject(err);
+      },
+      signal: AbortSignal.timeout(60000), // 60 second timeout
     });
-  });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} for ${url}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    fs.writeFileSync(outputPath, Buffer.from(buffer));
+  } catch (error: any) {
+    // Clean up partial file
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+    }
+    throw new Error(`Failed to download ${url}: ${error.message}`);
+  }
 }
 
 /**
