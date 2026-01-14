@@ -1,7 +1,7 @@
 /**
- * In-Memory Project Store
+ * Database-backed Project Store (Prisma + PostgreSQL)
  * 
- * CRUD operations for Studio projects
+ * CRUD operations for Studio projects with persistent database storage
  */
 
 import { Project, CreateProjectRequest, DEFAULT_PROJECT_CONFIG, Slide } from './types';
@@ -9,113 +9,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { ScrapeResult } from '@/lib/types';
 import { generateVoiceoverScript } from './backend/scriptGenerator';
 import { selectBest4ImagesFor16x9 } from './backend/imageSelector';
+import { prisma } from '@/lib/prisma';
 import * as fs from 'fs';
-import * as path from 'path';
-
-/**
- * File-based persistence configuration
- */
-const PERSISTENCE_DIR = path.join(process.cwd(), 'tmp', 'store');
-const PROJECTS_FILE = path.join(PERSISTENCE_DIR, 'projects.json');
-
-/**
- * Ensure persistence directory exists
- */
-function ensurePersistenceDir() {
-  if (!fs.existsSync(PERSISTENCE_DIR)) {
-    fs.mkdirSync(PERSISTENCE_DIR, { recursive: true });
-    console.log('[ProjectStore] Created persistence directory:', PERSISTENCE_DIR);
-  }
-}
-
-/**
- * Load projects from disk
- */
-function loadProjectsFromDisk(): Map<string, Project> {
-  ensurePersistenceDir();
-  
-  if (!fs.existsSync(PROJECTS_FILE)) {
-    console.log('[ProjectStore] No persisted projects found, starting fresh');
-    return new Map<string, Project>();
-  }
-
-  try {
-    const data = fs.readFileSync(PROJECTS_FILE, 'utf-8');
-    const projectsArray = JSON.parse(data);
-    
-    const projectsMap = new Map<string, Project>();
-    for (const [id, project] of projectsArray) {
-      // Restore Date objects
-      project.createdAt = new Date(project.createdAt);
-      project.updatedAt = new Date(project.updatedAt);
-      if (project.lastPreviewRenderedAt) {
-        project.lastPreviewRenderedAt = new Date(project.lastPreviewRenderedAt);
-      }
-      projectsMap.set(id, project);
-    }
-    
-    console.log(`[ProjectStore] Loaded ${projectsMap.size} projects from disk`);
-    return projectsMap;
-  } catch (error) {
-    console.error('[ProjectStore] Error loading projects from disk:', error);
-    return new Map<string, Project>();
-  }
-}
-
-/**
- * Save projects to disk
- */
-function saveProjectsToDisk() {
-  try {
-    ensurePersistenceDir();
-    const projectsArray = Array.from(projects.entries());
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projectsArray, null, 2), 'utf-8');
-    console.log(`[ProjectStore] Saved ${projects.size} projects to disk`);
-  } catch (error) {
-    console.error('[ProjectStore] Error saving projects to disk:', error);
-  }
-}
-
-/**
- * Global singleton store for projects (fixes Next.js module isolation)
- */
-const globalForProjects = globalThis as unknown as {
-  projectsStore: Map<string, Project> | undefined;
-  projectsLoaded: boolean | undefined;
-};
-
-// Load from disk on first access
-if (!globalForProjects.projectsLoaded) {
-  globalForProjects.projectsStore = loadProjectsFromDisk();
-  globalForProjects.projectsLoaded = true;
-}
-
-const projects = globalForProjects.projectsStore ?? new Map<string, Project>();
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForProjects.projectsStore = projects;
-}
-
-/**
- * Auto-cleanup: Remove projects older than 24 hours
- */
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-
-  let cleaned = 0;
-  for (const [id, project] of projects.entries()) {
-    if (now - project.createdAt.getTime() > maxAge) {
-      projects.delete(id);
-      cleaned++;
-      console.log(`[ProjectStore] Cleaned up old project: ${id}`);
-    }
-  }
-  
-  if (cleaned > 0) {
-    saveProjectsToDisk();
-  }
-}, 60 * 60 * 1000); // Run every hour
 
 /**
  * Create a new project from scraper results
@@ -293,71 +188,212 @@ export async function createProject(request: CreateProjectRequest): Promise<Proj
     updatedAt: new Date(),
   };
 
-  projects.set(projectId, project);
-  saveProjectsToDisk();
+  // Save to database
+  try {
+    await prisma.project.create({
+      data: {
+        id: projectId,
+        business: project.business as any,
+        brand: project.brand as any,
+        sourceImages: project.sourceImages as any,
+        slides: project.slides as any,
+        bottomBanner: project.bottomBanner as any,
+        qrCode: project.qrCode as any,
+        music: project.music as any,
+        voice: project.voice as any,
+        endScreen: project.endScreen as any,
+        status: project.status,
+        previewVideoUrl: project.previewVideoUrl,
+        finalVideoUrl: project.finalVideoUrl,
+        lastPreviewConfigHash: project.lastPreviewConfigHash,
+        lastPreviewRenderedAt: project.lastPreviewRenderedAt,
+      },
+    });
 
-  console.log(`[ProjectStore] Created project ${projectId} with ${slides.length} slides (${slides.length - 1} content + 1 end screen)`);
+    console.log(`[ProjectStore] Created project ${projectId} in database with ${slides.length} slides`);
+  } catch (error) {
+    console.error(`[ProjectStore] Database error creating project:`, error);
+    throw new Error('Failed to save project to database');
+  }
 
   return project;
 }
 
 /**
- * Get project by ID
+ * Get project by ID from database
  */
-export function getProject(projectId: string): Project | null {
-  console.log(`[ProjectStore] Getting project ${projectId}, total projects: ${projects.size}`);
-  console.log(`[ProjectStore] Available IDs:`, Array.from(projects.keys()));
-  const project = projects.get(projectId) || null;
-  console.log(`[ProjectStore] Found:`, project ? 'YES' : 'NO');
-  return project;
+export async function getProject(projectId: string): Promise<Project | null> {
+  console.log(`[ProjectStore] Getting project ${projectId} from database`);
+  
+  try {
+    const dbProject = await prisma.project.findUnique({
+      where: { id: projectId },
+    });
+
+    if (!dbProject) {
+      console.log(`[ProjectStore] Project ${projectId} not found`);
+      return null;
+    }
+
+    // Convert database record to Project type
+    const project: Project = {
+      projectId: dbProject.id,
+      business: dbProject.business as any,
+      brand: dbProject.brand as any,
+      sourceImages: dbProject.sourceImages as any,
+      slides: dbProject.slides as any,
+      bottomBanner: dbProject.bottomBanner as any,
+      qrCode: dbProject.qrCode as any,
+      music: dbProject.music as any,
+      voice: dbProject.voice as any,
+      endScreen: dbProject.endScreen as any,
+      status: dbProject.status as any,
+      previewVideoUrl: dbProject.previewVideoUrl,
+      finalVideoUrl: dbProject.finalVideoUrl,
+      lastPreviewConfigHash: dbProject.lastPreviewConfigHash,
+      lastPreviewRenderedAt: dbProject.lastPreviewRenderedAt,
+      createdAt: dbProject.createdAt,
+      updatedAt: dbProject.updatedAt,
+    };
+
+    console.log(`[ProjectStore] Found project ${projectId}`);
+    return project;
+  } catch (error) {
+    console.error(`[ProjectStore] Database error getting project:`, error);
+    return null;
+  }
 }
 
 /**
- * Update project
+ * Update project in database
  */
-export function updateProject(
+export async function updateProject(
   projectId: string,
   updates: Partial<Project>
-): Project | null {
-  const project = projects.get(projectId);
-  if (!project) return null;
+): Promise<Project | null> {
+  console.log(`[ProjectStore] Updating project ${projectId}`);
 
-  const updated: Project = {
-    ...project,
-    ...updates,
-    updatedAt: new Date(),
-  };
+  try {
+    // Prepare update data (exclude projectId, createdAt from updates)
+    const { projectId: _, createdAt, ...updateData } = updates;
 
-  projects.set(projectId, updated);
-  saveProjectsToDisk();
+    const dbProject = await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        ...(updateData.business && { business: updateData.business as any }),
+        ...(updateData.brand && { brand: updateData.brand as any }),
+        ...(updateData.sourceImages && { sourceImages: updateData.sourceImages as any }),
+        ...(updateData.slides && { slides: updateData.slides as any }),
+        ...(updateData.bottomBanner && { bottomBanner: updateData.bottomBanner as any }),
+        ...(updateData.qrCode && { qrCode: updateData.qrCode as any }),
+        ...(updateData.music && { music: updateData.music as any }),
+        ...(updateData.voice && { voice: updateData.voice as any }),
+        ...(updateData.endScreen && { endScreen: updateData.endScreen as any }),
+        ...(updateData.status && { status: updateData.status }),
+        ...(updateData.previewVideoUrl !== undefined && { previewVideoUrl: updateData.previewVideoUrl }),
+        ...(updateData.finalVideoUrl !== undefined && { finalVideoUrl: updateData.finalVideoUrl }),
+        ...(updateData.lastPreviewConfigHash !== undefined && { lastPreviewConfigHash: updateData.lastPreviewConfigHash }),
+        ...(updateData.lastPreviewRenderedAt !== undefined && { lastPreviewRenderedAt: updateData.lastPreviewRenderedAt }),
+      },
+    });
 
-  console.log(`[ProjectStore] Updated project ${projectId}`);
+    // Convert back to Project type
+    const project: Project = {
+      projectId: dbProject.id,
+      business: dbProject.business as any,
+      brand: dbProject.brand as any,
+      sourceImages: dbProject.sourceImages as any,
+      slides: dbProject.slides as any,
+      bottomBanner: dbProject.bottomBanner as any,
+      qrCode: dbProject.qrCode as any,
+      music: dbProject.music as any,
+      voice: dbProject.voice as any,
+      endScreen: dbProject.endScreen as any,
+      status: dbProject.status as any,
+      previewVideoUrl: dbProject.previewVideoUrl,
+      finalVideoUrl: dbProject.finalVideoUrl,
+      lastPreviewConfigHash: dbProject.lastPreviewConfigHash,
+      lastPreviewRenderedAt: dbProject.lastPreviewRenderedAt,
+      createdAt: dbProject.createdAt,
+      updatedAt: dbProject.updatedAt,
+    };
 
-  return updated;
-}
-
-/**
- * Delete project
- */
-export function deleteProject(projectId: string): boolean {
-  const deleted = projects.delete(projectId);
-  if (deleted) {
-    saveProjectsToDisk();
-    console.log(`[ProjectStore] Deleted project ${projectId}`);
+    console.log(`[ProjectStore] Updated project ${projectId}`);
+    return project;
+  } catch (error) {
+    console.error(`[ProjectStore] Database error updating project:`, error);
+    return null;
   }
-  return deleted;
 }
 
 /**
- * List all projects (for debugging)
+ * Delete project from database
  */
-export function listProjects(): Project[] {
-  return Array.from(projects.values());
+export async function deleteProject(projectId: string): Promise<boolean> {
+  console.log(`[ProjectStore] Deleting project ${projectId}`);
+
+  try {
+    await prisma.project.delete({
+      where: { id: projectId },
+    });
+
+    console.log(`[ProjectStore] Deleted project ${projectId}`);
+    return true;
+  } catch (error) {
+    console.error(`[ProjectStore] Database error deleting project:`, error);
+    return false;
+  }
 }
 
 /**
- * Get project count
+ * List all projects from database (newest first)
  */
-export function getProjectCount(): number {
-  return projects.size;
+export async function listProjects(): Promise<Project[]> {
+  console.log(`[ProjectStore] Listing all projects from database`);
+
+  try {
+    const dbProjects = await prisma.project.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const projects: Project[] = dbProjects.map((dbProject) => ({
+      projectId: dbProject.id,
+      business: dbProject.business as any,
+      brand: dbProject.brand as any,
+      sourceImages: dbProject.sourceImages as any,
+      slides: dbProject.slides as any,
+      bottomBanner: dbProject.bottomBanner as any,
+      qrCode: dbProject.qrCode as any,
+      music: dbProject.music as any,
+      voice: dbProject.voice as any,
+      endScreen: dbProject.endScreen as any,
+      status: dbProject.status as any,
+      previewVideoUrl: dbProject.previewVideoUrl,
+      finalVideoUrl: dbProject.finalVideoUrl,
+      lastPreviewConfigHash: dbProject.lastPreviewConfigHash,
+      lastPreviewRenderedAt: dbProject.lastPreviewRenderedAt,
+      createdAt: dbProject.createdAt,
+      updatedAt: dbProject.updatedAt,
+    }));
+
+    console.log(`[ProjectStore] Found ${projects.length} projects`);
+    return projects;
+  } catch (error) {
+    console.error(`[ProjectStore] Database error listing projects:`, error);
+    return [];
+  }
+}
+
+/**
+ * Get project count from database
+ */
+export async function getProjectCount(): Promise<number> {
+  try {
+    const count = await prisma.project.count();
+    console.log(`[ProjectStore] Total projects in database: ${count}`);
+    return count;
+  } catch (error) {
+    console.error(`[ProjectStore] Database error counting projects:`, error);
+    return 0;
+  }
 }

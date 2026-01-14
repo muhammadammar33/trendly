@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     console.log('╚════════════════════════════════════════════════════════╝\n');
 
     // Get the project
-    const project = getProject(projectId);
+    const project = await getProject(projectId);
     if (!project) {
       return NextResponse.json(
         { error: 'Project not found' },
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
     const fileSizeKB = (stats.size / 1024).toFixed(2);
 
     // Update project with new audio path
-    updateProject(projectId, {
+    await updateProject(projectId, {
       voice: {
         ...project.voice,
         audioPath,

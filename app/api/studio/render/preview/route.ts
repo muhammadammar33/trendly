@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const project = getProject(projectId);
+    const project = await getProject(projectId);
     if (!project) {
       return NextResponse.json(
         { error: 'Project not found. Please refresh and try again.' },
@@ -120,7 +120,7 @@ async function processRenderAsync(
     console.log(`[API] Generated config hash for ${type}: ${configHash}`);
     
     if (type === 'preview') {
-      updateProject(project.projectId, {
+      await updateProject(project.projectId, {
         status: 'preview-ready',
         previewVideoUrl: videoUrl,
         lastPreviewConfigHash: configHash,
@@ -128,7 +128,7 @@ async function processRenderAsync(
       });
       console.log(`[API] Updated project with preview hash: ${configHash}`);
     } else {
-      updateProject(project.projectId, {
+      await updateProject(project.projectId, {
         status: 'final-ready',
         finalVideoUrl: videoUrl,
       });
@@ -155,7 +155,7 @@ async function processRenderAsync(
       stage: 'Failed',
     });
 
-    updateProject(project.projectId, {
+    await updateProject(project.projectId, {
       status: 'error',
     });
   }

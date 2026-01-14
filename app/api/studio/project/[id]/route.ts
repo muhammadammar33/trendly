@@ -15,7 +15,7 @@ export async function GET(
     const { id } = await params;
     console.log(`[API] GET /api/studio/project/${id}`);
     
-    const project = getProject(id);
+    const project = await getProject(id);
     console.log(`[API] Project found:`, project ? 'YES' : 'NO');
 
     if (!project) {

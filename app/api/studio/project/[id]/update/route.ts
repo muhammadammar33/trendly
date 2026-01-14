@@ -16,7 +16,7 @@ export async function POST(
     const { id } = await params;
     const updates: UpdateProjectRequest = await request.json();
 
-    const project = getProject(id);
+    const project = await getProject(id);
     if (!project) {
       return NextResponse.json(
         { error: 'Project not found' },
@@ -24,7 +24,7 @@ export async function POST(
       );
     }
 
-    const updated = updateProject(id, updates as any);
+    const updated = await updateProject(id, updates as any);
 
     return NextResponse.json(updated);
   } catch (error: any) {

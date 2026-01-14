@@ -282,16 +282,31 @@ export default function StudioModalV2({
   // Video controls
   const togglePlay = async () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) {
+      console.error("[togglePlay] No video ref");
+      return;
+    }
+
+    console.log("[togglePlay] Video state:", {
+      paused: video.paused,
+      ended: video.ended,
+      currentTime: video.currentTime,
+      duration: video.duration,
+      readyState: video.readyState,
+      src: video.src,
+    });
 
     try {
       if (video.paused) {
+        console.log("[togglePlay] Attempting to play...");
         await video.play();
+        console.log("[togglePlay] Play successful");
       } else {
+        console.log("[togglePlay] Pausing...");
         video.pause();
       }
     } catch (error) {
-      console.error("Video playback error:", error);
+      console.error("[togglePlay] Playback error:", error);
       // Only show toast for non-abort errors
       if (error instanceof Error && error.name !== "AbortError") {
         showToast("Failed to play video", "error");
@@ -560,7 +575,12 @@ export default function StudioModalV2({
   // Video time update
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video) {
+      console.log("[Video Effect] No video ref");
+      return;
+    }
+
+    console.log("[Video Effect] Setting up event listeners for:", project?.previewVideoUrl);
 
     const handleTimeUpdate = () => {
       console.log(
@@ -1017,10 +1037,24 @@ export default function StudioModalV2({
                         <span className="text-sm text-gray-300">Slideshow</span>
                       </div>
                     </div>
-                    <div className="flex-1 flex gap-1 min-h-[64px] relative">
+                    <div 
+                      className="flex-1 flex gap-1 min-h-[64px] relative cursor-pointer"
+                      onClick={(e) => {
+                        const video = videoRef.current;
+                        if (!video || !duration) return;
+                        
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const percentage = x / rect.width;
+                        const newTime = percentage * duration;
+                        
+                        console.log('[Timeline Click] Seeking to:', newTime, 'seconds');
+                        video.currentTime = newTime;
+                      }}
+                    >
                       {/* Progress indicator */}
                       <div
-                        className="absolute top-0 bottom-0 w-1 bg-red-500 z-10 transition-all duration-100"
+                        className="absolute top-0 bottom-0 w-1 bg-red-500 z-10 transition-all duration-100 pointer-events-none"
                         style={{
                           left: `${
                             duration > 0 ? (currentTime / duration) * 100 : 0

@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const project = getProject(projectId);
+    const project = await getProject(projectId);
     if (!project) {
       return NextResponse.json(
         { error: 'Project not found' },
@@ -97,12 +97,12 @@ async function processRenderAsync(
     const videoUrl = `/studio/videos/${fileName}`;
     
     if (type === 'preview') {
-      updateProject(project.projectId, {
+      await updateProject(project.projectId, {
         status: 'preview-ready',
         previewVideoUrl: videoUrl,
       });
     } else {
-      updateProject(project.projectId, {
+      await updateProject(project.projectId, {
         status: 'final-ready',
         finalVideoUrl: videoUrl,
       });
@@ -126,7 +126,7 @@ async function processRenderAsync(
       stage: 'Failed',
     });
 
-    updateProject(project.projectId, {
+    await updateProject(project.projectId, {
       status: 'error',
     });
   }

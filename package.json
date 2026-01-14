@@ -4,13 +4,17 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "next lint",
     "playwright:install": "playwright install chromium",
-    "vercel-build": "next build",
-    "postinstall": "echo 'Skipping Playwright browser download on Vercel'",
-    "test:gradium": "npx tsx test-gradium.ts"
+    "vercel-build": "prisma generate && next build",
+    "postinstall": "prisma generate",
+    "test:gradium": "npx tsx test-gradium.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
