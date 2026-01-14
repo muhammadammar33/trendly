@@ -253,6 +253,14 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
     // Download from URL
     console.log(`[VideoRenderer] Downloading slide ${index} from: ${slide.imageUrl}`);
     const tempPath = filePath.replace('.jpg', '.tmp');
+    
+    // Ensure directory exists before downloading
+    const dir = path.dirname(tempPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`[VideoRenderer] Created directory: ${dir}`);
+    }
+    
     await downloadFile(slide.imageUrl, tempPath);
     
     // Convert to JPG using Sharp (handles webp, png, etc.)
@@ -263,13 +271,21 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
     
     // Remove temp file (with retry for Windows file locks)
     if (fs.existsSync(tempPath)) {
-      try {
-        fs.unlinkSync(tempPath);
-      } catch (unlinkError: any) {
-        if (unlinkError.code === 'EBUSY') {
-          console.log(`[VideoRenderer] Temp file locked, will be cleaned up later`);
-        } else {
-          console.error(`[VideoRenderer] Error removing temp file:`, unlinkError);
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          fs.unlinkSync(tempPath);
+          console.log(`[VideoRenderer] Cleaned up temp file: ${tempPath}`);
+          break;
+        } catch (unlinkError: any) {
+          if ((unlinkError.code === 'EBUSY' || unlinkError.code === 'EPERM') && retries > 1) {
+            console.log(`[VideoRenderer] Temp file locked, retrying... (${retries - 1} attempts left)`);
+            await new Promise(resolve => setTimeout(resolve, 200)); // Wait 200ms
+            retries--;
+          } else {
+            console.log(`[VideoRenderer] Could not delete temp file (${unlinkError.code}), will be cleaned up later`);
+            break;
+          }
         }
       }
     }
@@ -409,9 +425,13 @@ async function downloadFile(url: string, outputPath: string): Promise<void> {
     console.log(`[VideoRenderer] Wrote file to ${outputPath}`);
   } catch (error: any) {
     console.error(`[VideoRenderer] Download error for ${url}:`, error.message);
-    // Clean up partial file
-    if (fs.existsSync(outputPath)) {
-      fs.unlinkSync(outputPath);
+    // Clean up partial file (ignore errors if file is locked)
+    try {
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+      }
+    } catch (cleanupError: any) {
+      console.log(`[VideoRenderer] Could not clean up temp file (${cleanupError.code}), ignoring...`);
     }
     throw new Error(`Failed to download ${url}: ${error.message}`);
   }
