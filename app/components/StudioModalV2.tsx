@@ -17,6 +17,7 @@ import {
   Pause,
   Download,
   Loader2,
+  Link,
   Settings,
   Image as ImageIcon,
   Save,
@@ -204,6 +205,34 @@ export default function StudioModalV2({
 
     // Extra wait to ensure server has processed the save
     await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // ALWAYS regenerate voice audio before rendering
+    if (project?.voice?.enabled && project?.voice?.script) {
+      showToast("Regenerating voice audio...", "info");
+      try {
+        const voiceRes = await fetch("/api/voice/gradium", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId,
+            script: project.voice.script,
+          }),
+        });
+        if (!voiceRes.ok) {
+          const voiceError = await voiceRes.json();
+          throw new Error(voiceError.error || "Voice generation failed");
+        }
+        console.log("[Render] Voice audio regenerated successfully");
+        // Wait a bit for file to be written
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } catch (voiceErr: any) {
+        console.error("[Render] Voice regeneration failed:", voiceErr);
+        showToast(
+          "Voice generation failed, continuing with old audio",
+          "error"
+        );
+      }
+    }
 
     setRenderLoading(true);
     try {
@@ -925,21 +954,13 @@ export default function StudioModalV2({
                 {/* Play button overlay */}
                 {!isPlaying && (
                   <div
-                    className="absolute inset-0 flex items-center justify-center cursor-pointer bg-black/10 z-20"
+                    className="absolute inset-0 flex items-center justify-center cursor-pointer bg-black/10 z-10 hover:bg-black/20 transition-colors"
                     onClick={togglePlay}
                   >
-                    <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm hover:bg-white/30 transition-colors flex items-center justify-center">
+                    <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm hover:bg-white/30 transition-all duration-200 flex items-center justify-center shadow-2xl">
                       <Play className="w-10 h-10 text-white ml-1" />
                     </div>
                   </div>
-                )}
-
-                {/* Click anywhere to play/pause when playing */}
-                {isPlaying && (
-                  <div
-                    className="absolute inset-0 cursor-pointer z-20"
-                    onClick={togglePlay}
-                  />
                 )}
               </div>
             ) : (
@@ -1153,11 +1174,19 @@ export default function StudioModalV2({
                               minWidth: "80px",
                             }}
                           >
-                            <img
-                              src={slide.imageUrl}
-                              alt={`Slide ${index + 1}`}
-                              className="w-full h-full object-cover"
-                            />
+                            {slide.isEndScreen || !slide.imageUrl ? (
+                              <div className="w-full h-full bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center">
+                                <span className="text-white font-bold text-xl">
+                                  END
+                                </span>
+                              </div>
+                            ) : (
+                              <img
+                                src={slide.imageUrl}
+                                alt={`Slide ${index + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            )}
                             <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs px-2 py-1 text-center">
                               {slideDuration.toFixed(1)}s
                             </div>

@@ -26,6 +26,50 @@ function sanitizeFFmpegText(text: string): string {
 }
 
 /**
+ * Create an image with link icon and text using SVG
+ * Renders Lucide link icon alongside the website URL
+ */
+async function createLinkIconImage(
+  outputPath: string,
+  text: string,
+  textColor: string,
+  fontSize: number = 48
+): Promise<void> {
+  // Parse the hex color to RGB
+  const hex = textColor.replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+
+  // Lucide link icon SVG path (simplified)
+  const iconSize = fontSize * 0.9;
+  const iconPath = 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71';
+  const iconPath2 = 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71';
+  
+  // Calculate text width (approximate)
+  const charWidth = fontSize * 0.6;
+  const textWidth = text.length * charWidth;
+  const padding = 20;
+  const iconSpacing = 15;
+  const totalWidth = iconSize + iconSpacing + textWidth + padding * 2;
+  const height = fontSize * 1.8;
+
+  const svgText = `
+    <svg width="${totalWidth}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <g transform="translate(${padding}, ${height / 2 - iconSize / 2})">
+        <path d="${iconPath}" stroke="rgb(${r},${g},${b})" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="${iconPath2}" stroke="rgb(${r},${g},${b})" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+      <text x="${padding + iconSize + iconSpacing}" y="${height / 2}" font-family="Arial" font-size="${fontSize}" fill="rgb(${r},${g},${b})" dominant-baseline="middle">${text}</text>
+    </svg>
+  `;
+
+  await sharp(Buffer.from(svgText))
+    .png()
+    .toFile(outputPath);
+}
+
+/**
  * Render configuration
  */
 export interface RenderConfig {
@@ -119,6 +163,28 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
       console.log('[VideoRenderer] No logo URL provided, skipping');
     }
 
+    // Create link icon image if website link is enabled on end screen
+    console.log('[VideoRenderer] Step 5.5: Creating link icon...');
+    let linkIconPath: string | null = null;
+    if (project.endScreen && project.endScreen.websiteLink) {
+      linkIconPath = path.join(workDir, 'link_icon.png');
+      try {
+        console.log(`[VideoRenderer] Creating link icon with text: ${project.endScreen.websiteLink}`);
+        await createLinkIconImage(
+          linkIconPath,
+          project.endScreen.websiteLink,
+          project.endScreen.textColor || '#FFFFFF',
+          48
+        );
+        console.log('[VideoRenderer] ✓ Link icon created');
+      } catch (err) {
+        console.warn('[VideoRenderer] ⚠ Link icon creation failed, continuing without:', err);
+        linkIconPath = null;
+      }
+    } else {
+      console.log('[VideoRenderer] No website link on end screen, skipping link icon');
+    }
+
     // Use pre-generated voice or generate TTS on-the-fly
     report(40, 'Processing voice');
     console.log('[VideoRenderer] Step 6: Processing voiceover...');
@@ -148,7 +214,7 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
     report(50, 'Rendering video');
     console.log('[VideoRenderer] Step 7: Starting FFmpeg render...');
     console.log(`[VideoRenderer] Output path: ${outputPath}`);
-    await renderWithFFmpeg(project, allSlides, workDir, imagesDir, qrPath, logoPath, ttsPath, outputPath, resolution, report);
+    await renderWithFFmpeg(project, allSlides, workDir, imagesDir, qrPath, logoPath, linkIconPath, ttsPath, outputPath, resolution, report);
     console.log('[VideoRenderer] ✓ FFmpeg render completed');
 
     // Cleanup
@@ -326,7 +392,7 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
  * Create a blank colored image using Sharp (more reliable than FFmpeg)
  */
 async function createBlankImage(outputPath: string, width: number, height: number, color: string): Promise<void> {
-  console.log(`[VideoRenderer] Creating blank image: ${outputPath} (${width}x${height}, ${color})`);
+  console.log(`[VideoRenderer] Creating END screen image: ${outputPath} (${width}x${height}, ${color})`);
   
   try {
     // Convert hex color to RGB
@@ -337,25 +403,39 @@ async function createBlankImage(outputPath: string, width: number, height: numbe
     
     console.log(`[VideoRenderer] RGB values: r=${r}, g=${g}, b=${b}`);
     
-    // Create blank image with sharp (with timeout protection)
-    console.log(`[VideoRenderer] Calling sharp.create()...`);
+    // Create blank image with "END" text overlay
+    console.log(`[VideoRenderer] Creating end screen with text overlay...`);
     
     const createImagePromise = (async () => {
-      const image = sharp({
-        create: {
-          width,
-          height,
-          channels: 3,
-          background: { r, g, b }
-        }
-      });
+      // Create SVG with "END" text and styling
+      const svgText = `
+        <svg width="${width}" height="${height}">
+          <rect width="100%" height="100%" fill="rgb(${r},${g},${b})"/>
+          <text x="50%" y="45%" 
+                font-family="Arial, sans-serif" 
+                font-size="180" 
+                font-weight="bold" 
+                fill="white" 
+                text-anchor="middle" 
+                dominant-baseline="middle">
+            END
+          </text>
+          <text x="50%" y="58%" 
+                font-family="Arial, sans-serif" 
+                font-size="48" 
+                fill="rgba(255,255,255,0.7)" 
+                text-anchor="middle" 
+                dominant-baseline="middle">
+            Thank you for watching
+          </text>
+        </svg>
+      `;
       
-      console.log(`[VideoRenderer] Converting to JPEG...`);
-      const jpeg = image.jpeg({ quality: 90 });
+      await sharp(Buffer.from(svgText))
+        .jpeg({ quality: 90 })
+        .toFile(outputPath);
       
-      console.log(`[VideoRenderer] Writing to file: ${outputPath}...`);
-      await jpeg.toFile(outputPath);
-      console.log(`[VideoRenderer] ✓ Blank image created successfully`);
+      console.log(`[VideoRenderer] ✓ End screen image created successfully`);
     })();
     
     // Add 10-second timeout
@@ -464,6 +544,7 @@ async function renderWithFFmpeg(
   imagesDir: string,
   qrPath: string | null,
   logoPath: string | null,
+  linkIconPath: string | null,
   ttsPath: string | null,
   outputPath: string,
   resolution: '1080p' | '720p',
@@ -553,6 +634,14 @@ async function renderWithFFmpeg(
     qrInputIndex = logoInputIndex !== null ? logoInputIndex + 1 : (ttsInputIndex !== null ? ttsInputIndex + 1 : (musicInputIndex !== null ? musicInputIndex + 1 : nextInputIndex));
     args.push('-i', qrPath);
     console.log(`[VideoRenderer] QR input at index ${qrInputIndex}: ${qrPath}`);
+  }
+
+  // Input: Link Icon (if available)
+  let linkIconInputIndex: number | null = null;
+  if (linkIconPath && fs.existsSync(linkIconPath)) {
+    linkIconInputIndex = qrInputIndex !== null ? qrInputIndex + 1 : (logoInputIndex !== null ? logoInputIndex + 1 : (ttsInputIndex !== null ? ttsInputIndex + 1 : (musicInputIndex !== null ? musicInputIndex + 1 : nextInputIndex)));
+    args.push('-i', linkIconPath);
+    console.log(`[VideoRenderer] Link icon input at index ${linkIconInputIndex}: ${linkIconPath}`);
   }
 
   // Build filter complex
@@ -720,52 +809,66 @@ async function renderWithFFmpeg(
     filterParts.push(`${currentStream}drawbox=x=0:y=0:w=${width}:h=${height}:color=#FFFFFF:t=fill[vendbg]`);
     currentStream = '[vendbg]';
     
-    // Company name at top center
-    if (project.endScreen.companyName && project.endScreen.companyName.trim()) {
-      const companyNamePath = path.join(workDir, 'endscreen_company.txt');
-      fs.writeFileSync(companyNamePath, project.endScreen.companyName, 'utf-8');
-      const companyNameFile = companyNamePath
-        .replace(/\\/g, '/')
-        .replace(/:/g, '\\\\:')
-        .replace(/ /g, '\\\\ ');
-      
-      filterParts.push(
-        `${currentStream}drawtext=textfile=${companyNameFile}:fontsize=72:fontcolor=${project.endScreen.textColor}:` +
-        `x=(w-text_w)/2:y=120[vendcompany]`
-      );
-      currentStream = '[vendcompany]';
-    }
+    // Add "END" text in large letters at center if no company name
+    const hasCompanyName = project.endScreen.companyName && project.endScreen.companyName.trim();
+    const hasPhoneNumber = project.endScreen.phoneNumber && project.endScreen.phoneNumber.trim();
+    const hasWebsiteLink = project.endScreen.websiteLink && project.endScreen.websiteLink.trim();
     
-    // Phone number in center
-    if (project.endScreen.phoneNumber && project.endScreen.phoneNumber.trim()) {
-      const phoneNumberPath = path.join(workDir, 'endscreen_phone.txt');
-      fs.writeFileSync(phoneNumberPath, project.endScreen.phoneNumber, 'utf-8');
-      const phoneNumberFile = phoneNumberPath
+    // If no content at all, show "END" text
+    if (!hasCompanyName && !hasPhoneNumber && !hasWebsiteLink) {
+      const endTextPath = path.join(workDir, 'endscreen_end.txt');
+      fs.writeFileSync(endTextPath, 'END', 'utf-8');
+      const endTextFile = endTextPath
         .replace(/\\/g, '/')
         .replace(/:/g, '\\\\:')
         .replace(/ /g, '\\\\ ');
       
       filterParts.push(
-        `${currentStream}drawtext=textfile=${phoneNumberFile}:fontsize=140:fontcolor=${project.endScreen.phoneNumberColor}:` +
-        `x=(w-text_w)/2:y=(h-text_h)/2:fontfile=/Windows/Fonts/arialbd.ttf[vendphone]`
+        `${currentStream}drawtext=textfile=${endTextFile}:fontsize=200:fontcolor=#1a1a2e:` +
+        `x=(w-text_w)/2:y=(h-text_h)/2:fontfile=/Windows/Fonts/arialbd.ttf[vendend]`
       );
-      currentStream = '[vendphone]';
-    }
-    
-    // Website link at bottom center
-    if (project.endScreen.websiteLink && project.endScreen.websiteLink.trim()) {
-      const websiteLinkPath = path.join(workDir, 'endscreen_link.txt');
-      fs.writeFileSync(websiteLinkPath, `🔗 ${project.endScreen.websiteLink}`, 'utf-8');
-      const websiteLinkFile = websiteLinkPath
-        .replace(/\\/g, '/')
-        .replace(/:/g, '\\\\:')
-        .replace(/ /g, '\\\\ ');
+      currentStream = '[vendend]';
+    } else {
+      // Company name at top center
+      if (hasCompanyName) {
+        const companyNamePath = path.join(workDir, 'endscreen_company.txt');
+        fs.writeFileSync(companyNamePath, project.endScreen.companyName, 'utf-8');
+        const companyNameFile = companyNamePath
+          .replace(/\\/g, '/')
+          .replace(/:/g, '\\\\:')
+          .replace(/ /g, '\\\\ ');
+        
+        filterParts.push(
+          `${currentStream}drawtext=textfile=${companyNameFile}:fontsize=72:fontcolor=${project.endScreen.textColor}:` +
+          `x=(w-text_w)/2:y=120[vendcompany]`
+        );
+        currentStream = '[vendcompany]';
+      }
       
-      filterParts.push(
-        `${currentStream}drawtext=textfile=${websiteLinkFile}:fontsize=48:fontcolor=${project.endScreen.textColor}:` +
-        `x=(w-text_w)/2:y=h-180[vendlink]`
-      );
-      currentStream = '[vendlink]';
+      // Phone number in center
+      if (hasPhoneNumber) {
+        const phoneNumberPath = path.join(workDir, 'endscreen_phone.txt');
+        fs.writeFileSync(phoneNumberPath, project.endScreen.phoneNumber, 'utf-8');
+        const phoneNumberFile = phoneNumberPath
+          .replace(/\\/g, '/')
+          .replace(/:/g, '\\\\:')
+          .replace(/ /g, '\\\\ ');
+        
+        filterParts.push(
+          `${currentStream}drawtext=textfile=${phoneNumberFile}:fontsize=140:fontcolor=${project.endScreen.phoneNumberColor}:` +
+          `x=(w-text_w)/2:y=(h-text_h)/2:fontfile=/Windows/Fonts/arialbd.ttf[vendphone]`
+        );
+        currentStream = '[vendphone]';
+      }
+      
+      // Website link at bottom center with link icon
+      if (hasWebsiteLink && linkIconInputIndex !== null) {
+        // Overlay the link icon image at bottom center
+        filterParts.push(
+          `${currentStream}[${linkIconInputIndex}:v]overlay=(W-w)/2:H-180[vendlink]`
+        );
+        currentStream = '[vendlink]';
+      }
     }
     
     // Add logo overlay if available (top-left corner)
@@ -796,36 +899,71 @@ async function renderWithFFmpeg(
   // Track current video stream label
   // let videoStream = '[vbase]';
 
-  // Add banner overlay
+  // Add banner overlay with transparent background and slide-in animation
   if (project.bottomBanner.enabled && project.bottomBanner.text) {
     const bannerHeight = 80;
     const y = project.bottomBanner.position === 'bottom' ? height - bannerHeight : 0;
+    const animationDuration = 0.5; // Slide in over 0.5 seconds
     
-    // Write text to file to avoid FFmpeg escaping issues
-    const bannerTextPath = path.join(workDir, 'banner_text.txt');
-    fs.writeFileSync(bannerTextPath, project.bottomBanner.text, 'utf-8');
-    const bannerTextFile = bannerTextPath
+    // Parse text to extract company name and website
+    // Format: "CompanyName | website.com" or just text
+    const bannerText = project.bottomBanner.text;
+    const companyName = project.business?.title || project.brand?.name || bannerText;
+    const websiteUrl = project.qrCode?.url ? new URL(project.qrCode.url).hostname.replace('www.', '') : '';
+    
+    // Write company name and website to separate files
+    const companyTextPath = path.join(workDir, 'banner_company.txt');
+    const websiteTextPath = path.join(workDir, 'banner_website.txt');
+    
+    fs.writeFileSync(companyTextPath, companyName, 'utf-8');
+    const companyTextFile = companyTextPath
+      .replace(/\\/g, '/')
+      .replace(/:/g, '\\\\:')
+      .replace(/ /g, '\\\\ ');
+    
+    if (websiteUrl) {
+      fs.writeFileSync(websiteTextPath, websiteUrl, 'utf-8');
+    }
+    const websiteTextFile = websiteTextPath
       .replace(/\\/g, '/')
       .replace(/:/g, '\\\\:')
       .replace(/ /g, '\\\\ ');
     
     if (logoInputIndex !== null && project.bottomBanner.logoUrl) {
-      // Draw banner with logo
+      // Slide-in animation from bottom: starts at y+bannerHeight, slides to y
+      const slideInY = `if(lt(t,${animationDuration}),${y}+${bannerHeight}*(1-t/${animationDuration}),${y})`;
+      
+      // Draw semi-transparent banner (0.6 opacity for better transparency)
       filterParts.push(
-        `${videoStream}drawbox=x=0:y=${y}:w=${width}:h=${bannerHeight}:color=${project.bottomBanner.backgroundColor}@0.8:t=fill[vtemp1]`
+        `${videoStream}drawbox=x=0:y='${slideInY}':w=${width}:h=${bannerHeight}:color=black@0.6:t=fill[vtemp1]`
       );
+      
+      // Scale and position logo with slide-in animation
       filterParts.push(`[${logoInputIndex}:v]scale=-1:60[bannerlogo]`);
       filterParts.push(
-        `[vtemp1][bannerlogo]overlay=20:${y + 10}:shortest=1[vtemp2]`
+        `[vtemp1][bannerlogo]overlay=20:y='${slideInY}'+10:shortest=1[vtemp2]`
       );
+      
+      // Add company name in center with slide-in
       filterParts.push(
-        `[vtemp2]drawtext=textfile=${bannerTextFile}:fontsize=${project.bottomBanner.fontSize}:fontcolor=${project.bottomBanner.textColor}:x=w-text_w-20:y=${y + bannerHeight/2}[vwithbanner]`
+        `[vtemp2]drawtext=textfile=${companyTextFile}:fontsize=32:fontcolor=white:x=(w-text_w)/2:y='${slideInY}'+${bannerHeight/2 - 16}[vtemp3]`
       );
+      
+      // Add website URL on right with slide-in (if available)
+      if (websiteUrl) {
+        filterParts.push(
+          `[vtemp3]drawtext=textfile=${websiteTextFile}:fontsize=24:fontcolor=white:x=w-text_w-20:y='${slideInY}'+${bannerHeight/2 - 12}[vwithbanner]`
+        );
+      } else {
+        filterParts.push(`[vtemp3]copy[vwithbanner]`);
+      }
     } else {
-      // Draw banner without logo
+      // Draw banner without logo - just company name in center with slide-in
+      const slideInY = `if(lt(t,${animationDuration}),${y}+${bannerHeight}*(1-t/${animationDuration}),${y})`;
+      
       filterParts.push(
-        `${videoStream}drawbox=x=0:y=${y}:w=${width}:h=${bannerHeight}:color=${project.bottomBanner.backgroundColor}@0.8:t=fill,` +
-        `drawtext=textfile=${bannerTextFile}:fontsize=${project.bottomBanner.fontSize}:fontcolor=${project.bottomBanner.textColor}:x=(w-text_w)/2:y=${y + bannerHeight/2}[vwithbanner]`
+        `${videoStream}drawbox=x=0:y='${slideInY}':w=${width}:h=${bannerHeight}:color=black@0.6:t=fill,` +
+        `drawtext=textfile=${companyTextFile}:fontsize=32:fontcolor=white:x=(w-text_w)/2:y='${slideInY}'+${bannerHeight/2 - 16}[vwithbanner]`
       );
     }
     
