@@ -1,9 +1,10 @@
 "use client";
 
-import { Search } from "lucide-react";
+import { Search, Sparkles } from "lucide-react";
 import { useState } from "react";
 import type { ScrapeResult } from "@/lib/types";
 import StudioModal from "@/app/components/StudioModalV2";
+import StudioModalPlus from "@/app/components/StudioModalPlus";
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -12,6 +13,7 @@ export default function Home() {
   const [result, setResult] = useState<ScrapeResult | null>(null);
   const [studioProjectId, setStudioProjectId] = useState<string | null>(null);
   const [isStudioOpen, setIsStudioOpen] = useState(false);
+  const [isStudioPlusOpen, setIsStudioPlusOpen] = useState(false);
 
   const handleScrape = async () => {
     if (!url.trim()) {
@@ -29,9 +31,9 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           url: url.trim(),
-          enableCrawling: true // Enable multi-page crawling for better images
+          enableCrawling: true, // Enable multi-page crawling for better images
         }),
       });
 
@@ -60,7 +62,7 @@ export default function Home() {
 
       if (projectData.projectId) {
         // Step 3: Auto-open studio modal
-        console.log('[Home] Opening studio modal:', projectData.projectId);
+        console.log("[Home] Opening studio modal:", projectData.projectId);
         setResult(scraperResult);
         setStudioProjectId(projectData.projectId);
         setIsStudioOpen(true);
@@ -103,10 +105,27 @@ export default function Home() {
             <br />
             We have everything you need.
           </h1>
-          <p className="text-lg md:text-lg text-gray-300 mb-12">
+          <p className="text-lg md:text-lg text-gray-300 mb-8">
             We'll quickly transform your company name or URL into a television
             advertisement.
           </p>
+
+          {/* Studio Plus Button */}
+          <div className="flex justify-center mb-8">
+            <button
+              onClick={() => setIsStudioPlusOpen(true)}
+              className="group relative px-8 py-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-xl font-semibold transition-all transform hover:scale-105 shadow-lg hover:shadow-purple-500/50"
+            >
+              <div className="flex items-center gap-3">
+                <Sparkles className="w-5 h-5" />
+                <span>Try Studio Plus</span>
+                <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">
+                  PREMIUM
+                </span>
+              </div>
+              <div className="absolute inset-0 bg-gradient-to-r from-purple-600 to-blue-600 rounded-xl blur opacity-50 group-hover:opacity-75 transition-opacity -z-10" />
+            </button>
+          </div>
         </div>
 
         {/* Search Input */}
@@ -236,6 +255,12 @@ export default function Home() {
           }}
         />
       )}
+
+      {/* Studio Plus Modal */}
+      <StudioModalPlus
+        isOpen={isStudioPlusOpen}
+        onClose={() => setIsStudioPlusOpen(false)}
+      />
     </div>
   );
 }
