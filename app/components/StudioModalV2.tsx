@@ -580,7 +580,10 @@ export default function StudioModalV2({
       return;
     }
 
-    console.log("[Video Effect] Setting up event listeners for:", project?.previewVideoUrl);
+    console.log(
+      "[Video Effect] Setting up event listeners for:",
+      project?.previewVideoUrl
+    );
 
     const handleTimeUpdate = () => {
       console.log(
@@ -846,14 +849,56 @@ export default function StudioModalV2({
                   preload="metadata"
                   playsInline
                   onError={(e) => {
-                    console.error("[Video onError]", {
-                      src: project.previewVideoUrl,
-                      error: e.currentTarget.error,
+                    const video = e.currentTarget;
+                    const error = video.error;
+
+                    console.error("[Video onError] DETAILED ERROR:", {
+                      src: video.src,
+                      currentSrc: video.currentSrc,
+                      networkState: video.networkState,
+                      readyState: video.readyState,
+                      errorCode: error?.code,
+                      errorMessage: error?.message,
+                      MediaError: {
+                        MEDIA_ERR_ABORTED: 1,
+                        MEDIA_ERR_NETWORK: 2,
+                        MEDIA_ERR_DECODE: 3,
+                        MEDIA_ERR_SRC_NOT_SUPPORTED: 4,
+                      },
                     });
+
+                    let errorMsg = "Failed to load video";
+                    if (error) {
+                      switch (error.code) {
+                        case 1:
+                          errorMsg = "Video loading aborted";
+                          break;
+                        case 2:
+                          errorMsg =
+                            "Network error - check if video file exists";
+                          break;
+                        case 3:
+                          errorMsg =
+                            "Video decode error - file may be corrupted";
+                          break;
+                        case 4:
+                          errorMsg =
+                            "Video format not supported or file not found (404)";
+                          break;
+                      }
+                    }
+
+                    showToast(errorMsg, "error");
                   }}
-                  onLoadStart={() => console.log("[Video] Load start")}
-                  onLoadedData={() => console.log("[Video] Loaded data")}
-                  onCanPlay={() => console.log("[Video] Can play")}
+                  onLoadStart={() => {
+                    console.log("[Video] Load start:", project.previewVideoUrl);
+                  }}
+                  onLoadedData={() => {
+                    console.log("[Video] Loaded data successfully");
+                  }}
+                  onCanPlay={() => {
+                    console.log("[Video] Can play - ready for playback");
+                  }}
                 />
 
                 {/* Play button overlay */}
@@ -1037,18 +1082,22 @@ export default function StudioModalV2({
                         <span className="text-sm text-gray-300">Slideshow</span>
                       </div>
                     </div>
-                    <div 
+                    <div
                       className="flex-1 flex gap-1 min-h-[64px] relative cursor-pointer"
                       onClick={(e) => {
                         const video = videoRef.current;
                         if (!video || !duration) return;
-                        
+
                         const rect = e.currentTarget.getBoundingClientRect();
                         const x = e.clientX - rect.left;
                         const percentage = x / rect.width;
                         const newTime = percentage * duration;
-                        
-                        console.log('[Timeline Click] Seeking to:', newTime, 'seconds');
+
+                        console.log(
+                          "[Timeline Click] Seeking to:",
+                          newTime,
+                          "seconds"
+                        );
                         video.currentTime = newTime;
                       }}
                     >
