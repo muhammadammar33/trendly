@@ -194,6 +194,7 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
       // Handle end screen slide (no image URL)
       if (slide.isEndScreen || !slide.imageUrl || slide.imageUrl === '') {
         // Create a blank colored image for end screen
+        console.log(`[VideoRenderer] About to create blank image for slide ${index}...`);
         await createBlankImage(filePath, 1920, 1080, '#1a1a2e');
         console.log(`[VideoRenderer] Created blank end screen slide ${index}`);
         return;
@@ -220,12 +221,24 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
       console.log(`[VideoRenderer] ✓ Downloaded slide ${index}`);
     } catch (err) {
       console.error(`[VideoRenderer] ✗ Failed to process slide ${index}:`, err);
+      console.error(`[VideoRenderer] Error details:`, {
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : 'No stack',
+        slide: slide
+      });
       throw new Error(`Failed to process image at index ${index}: ${slide.imageUrl}`);
     }
   });
 
-  await Promise.all(downloads);
-  console.log(`[VideoRenderer] ✓ All ${slides.length} slides processed successfully`);
+  try {
+    console.log(`[VideoRenderer] Waiting for all ${downloads.length} download promises...`);
+    await Promise.all(downloads);
+    console.log(`[VideoRenderer] ✓ All ${slides.length} slides processed successfully`);
+  } catch (err) {
+    console.error(`[VideoRenderer] Promise.all failed:`, err);
+    console.error(`[VideoRenderer] One or more downloads failed`);
+    throw err;
+  }
 }
 
 /**
@@ -241,20 +254,41 @@ async function createBlankImage(outputPath: string, width: number, height: numbe
     const g = parseInt(hex.substring(2, 4), 16);
     const b = parseInt(hex.substring(4, 6), 16);
     
-    // Create blank image with sharp
-    await sharp({
-      create: {
-        width,
-        height,
-        channels: 3,
-        background: { r, g, b }
-      }
-    })
-    .jpeg({ quality: 90 })
-    .toFile(outputPath);
+    console.log(`[VideoRenderer] RGB values: r=${r}, g=${g}, b=${b}`);
     
-    console.log(`[VideoRenderer] ✓ Blank image created successfully`);
+    // Create blank image with sharp (with timeout protection)
+    console.log(`[VideoRenderer] Calling sharp.create()...`);
+    
+    const createImagePromise = (async () => {
+      const image = sharp({
+        create: {
+          width,
+          height,
+          channels: 3,
+          background: { r, g, b }
+        }
+      });
+      
+      console.log(`[VideoRenderer] Converting to JPEG...`);
+      const jpeg = image.jpeg({ quality: 90 });
+      
+      console.log(`[VideoRenderer] Writing to file: ${outputPath}...`);
+      await jpeg.toFile(outputPath);
+      console.log(`[VideoRenderer] ✓ Blank image created successfully`);
+    })();
+    
+    // Add 10-second timeout
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Sharp image creation timed out after 10 seconds')), 10000);
+    });
+    
+    await Promise.race([createImagePromise, timeoutPromise]);
+    
   } catch (err) {
+    console.error(`[VideoRenderer] createBlankImage ERROR:`, err);
+    console.error(`[VideoRenderer] Error type:`, err instanceof Error ? 'Error' : typeof err);
+    console.error(`[VideoRenderer] Error message:`, err instanceof Error ? err.message : String(err));
+    console.error(`[VideoRenderer] Error stack:`, err instanceof Error ? err.stack : 'No stack');
     throw new Error(`Failed to create blank image: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -555,15 +589,22 @@ async function renderWithFFmpeg(
   const actualTotalDuration = totalDurationWithoutTransitions - (numTransitions * transitionDuration);
   
   // Calculate content vs end screen timing
-  // The end screen is the LAST portion of the video, not separate
+  // Content duration = length of content slides stream (before end screen) after xfade transitions
   const endScreenDuration = endScreenSlide ? (endScreenSlide.endTime - endScreenSlide.startTime) : 0;
+  const adjustedEndScreenDuration = endScreenDuration; // End screen keeps full duration
   
-  // After transitions, the end screen still takes its original duration (minus any transition overlap)
-  // But since it's the last slide, it only loses overlap on the FRONT (not the back)
-  const adjustedEndScreenDuration = endScreenDuration; // 3s
-  const contentDuration = actualTotalDuration - adjustedEndScreenDuration;
+  const numContentSlides = endScreenSlide ? project.slides.length - 1 : project.slides.length;
+  const numContentTransitions = Math.max(0, numContentSlides - 1);
   
-  console.log(`[VideoRenderer] Timeline: total=${actualTotalDuration}s, content=${contentDuration}s, endscreen=${adjustedEndScreenDuration}s`);
+  // Calculate content stream length: sum of content slide durations minus transition overlaps
+  const contentSlidesDuration = project.slides
+    .slice(0, numContentSlides)
+    .reduce((sum, slide) => sum + (slide.endTime - slide.startTime), 0);
+  
+  const contentDuration = contentSlidesDuration - (numContentTransitions * transitionDuration);
+  
+  console.log(`[VideoRenderer] DEBUG: numContentSlides=${numContentSlides}, contentSlidesDuration=${contentSlidesDuration}s, numContentTransitions=${numContentTransitions}, transitionOverlap=${numContentTransitions * transitionDuration}s`);
+  console.log(`[VideoRenderer] Timeline: total=${actualTotalDuration}s, content=${contentDuration}s (${numContentSlides} slides), endscreen=${adjustedEndScreenDuration}s`);
 
   let videoStream = '[vconcat]';
 
@@ -812,12 +853,12 @@ async function renderWithFFmpeg(
         const minutes = parseInt(timeMatch[2]);
         const seconds = parseInt(timeMatch[3]);
         const currentTime = hours * 3600 + minutes * 60 + seconds;
-        const progress = Math.min(95, 50 + Math.floor((currentTime / actualTotalDuration) * 45));
+        const progress = Math.min(95, 50 + Math.floor((currentTime / actualDuration) * 45));
         
         if (progress !== lastProgress) {
           lastProgress = progress;
           onProgress(progress, 'Rendering video');
-          console.log(`[VideoRenderer] Progress: ${progress}% (${currentTime}s / ${actualTotalDuration}s)`);
+          console.log(`[VideoRenderer] Progress: ${progress}% (${currentTime}s / ${actualDuration}s)`);
         }
       }
     });

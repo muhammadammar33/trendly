@@ -562,20 +562,69 @@ export default function StudioModalV2({
     const video = videoRef.current;
     if (!video) return;
 
-    const handleTimeUpdate = () => setCurrentTime(video.currentTime);
-    const handleLoadedMetadata = () => {
-      setDuration(video.duration);
-      console.log("Video loaded, duration:", video.duration);
+    const handleTimeUpdate = () => {
+      console.log(
+        "[Video] Time update:",
+        video.currentTime,
+        "/",
+        video.duration
+      );
+      setCurrentTime(video.currentTime);
     };
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-    const handleEnded = () => setIsPlaying(false);
+    const handleLoadedMetadata = () => {
+      console.log("[Video] Metadata loaded, duration:", video.duration);
+      setDuration(video.duration);
+    };
+    const handlePlay = () => {
+      console.log("[Video] Playing");
+      setIsPlaying(true);
+    };
+    const handlePause = () => {
+      console.log("[Video] Paused");
+      setIsPlaying(false);
+    };
+    const handleEnded = () => {
+      console.log("[Video] Ended");
+      setIsPlaying(false);
+    };
+    const handleError = (e: Event) => {
+      const videoElement = e.target as HTMLVideoElement;
+      const error = videoElement.error;
+
+      console.error("[Video Error]", {
+        code: error?.code,
+        message: error?.message,
+        src: videoElement.src,
+        networkState: videoElement.networkState,
+        readyState: videoElement.readyState,
+      });
+
+      let errorMessage = "Failed to load video";
+      if (error) {
+        switch (error.code) {
+          case MediaError.MEDIA_ERR_ABORTED:
+            errorMessage = "Video loading aborted";
+            break;
+          case MediaError.MEDIA_ERR_NETWORK:
+            errorMessage = "Network error loading video";
+            break;
+          case MediaError.MEDIA_ERR_DECODE:
+            errorMessage = "Video decoding error";
+            break;
+          case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+            errorMessage = "Video format not supported or file not found";
+            break;
+        }
+      }
+      showToast(errorMessage, "error");
+    };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("play", handlePlay);
     video.addEventListener("pause", handlePause);
     video.addEventListener("ended", handleEnded);
+    video.addEventListener("error", handleError);
 
     // Set initial values
     if (video.duration && !isNaN(video.duration)) {
@@ -591,8 +640,9 @@ export default function StudioModalV2({
       video.removeEventListener("play", handlePlay);
       video.removeEventListener("pause", handlePause);
       video.removeEventListener("ended", handleEnded);
+      video.removeEventListener("error", handleError);
     };
-  }, [project?.previewVideoUrl]);
+  }, [project?.previewVideoUrl, volume, playbackSpeed, isMuted]);
 
   if (!isOpen) return null;
 
@@ -739,7 +789,28 @@ export default function StudioModalV2({
         <div className="flex-1 flex flex-col min-w-0">
           {/* Video Preview */}
           <div className="flex-1 bg-black flex items-center justify-center p-4 min-h-0">
-            {project?.previewVideoUrl ? (
+            {renderLoading ? (
+              <div className="text-center animate-in fade-in slide-in-from-bottom duration-500 max-w-md">
+                <div className="inline-block p-6 bg-purple-600/10 rounded-full mb-6 border border-purple-600/30">
+                  <Loader2 className="w-20 h-20 text-purple-500 animate-spin" />
+                </div>
+                <div className="text-2xl font-bold text-white mb-2">
+                  Rendering Video...
+                </div>
+                <div className="text-gray-400 mb-6">{renderStage}</div>
+
+                {/* Progress Bar */}
+                <div className="w-full bg-gray-800 rounded-full h-3 mb-3 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-purple-600 to-pink-600 transition-all duration-300 ease-out rounded-full"
+                    style={{ width: `${renderProgress}%` }}
+                  />
+                </div>
+                <div className="text-sm text-gray-400 font-mono">
+                  {renderProgress.toFixed(0)}% complete
+                </div>
+              </div>
+            ) : project?.previewVideoUrl ? (
               <div className="relative w-full h-full flex items-center justify-center">
                 <div className="absolute -inset-0.5 bg-gradient-to-r from-red-600 to-purple-600 rounded-xl opacity-10 blur-2xl pointer-events-none" />
                 <video
@@ -754,6 +825,15 @@ export default function StudioModalV2({
                   style={{ maxHeight: "calc(100vh - 400px)" }}
                   preload="metadata"
                   playsInline
+                  onError={(e) => {
+                    console.error("[Video onError]", {
+                      src: project.previewVideoUrl,
+                      error: e.currentTarget.error,
+                    });
+                  }}
+                  onLoadStart={() => console.log("[Video] Load start")}
+                  onLoadedData={() => console.log("[Video] Loaded data")}
+                  onCanPlay={() => console.log("[Video] Can play")}
                 />
 
                 {/* Play button overlay */}

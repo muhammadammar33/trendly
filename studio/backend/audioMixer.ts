@@ -139,13 +139,13 @@ export function buildAudioFilter(
       // No voice, just use music at normal volume
       const volumeFilter = `volume=${music.volume / 100}`;
       filters.push(`${musicFilter}${volumeFilter}[music]`);
-      filters.push('[music]acopy[aout]');
+      filters.push('[music]aresample=async=1:first_pts=0[aout]');
       console.log(`[AudioMixer] Using music only`);
       return filters.join(';');
     }
   } else if (hasVoice) {
     // Voice only, no music
-    filters.push('[voice]acopy[aout]');
+    filters.push('[voice]aresample=async=1:first_pts=0[aout]');
     console.log(`[AudioMixer] Using voice only`);
     return filters.join(';');
   }

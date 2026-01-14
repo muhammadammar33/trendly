@@ -1,0 +1,43 @@
+// Prisma Schema for Trendly Studio
+// Database: PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id        String   @id @default(uuid())
+  
+  // Source data (JSON fields)
+  business  Json     // ScrapeResult['business']
+  brand     Json     // ScrapeResult['brand']
+  sourceImages Json  // ScrapeResult['images']
+  
+  // Timeline
+  slides    Json     // Slide[]
+  
+  // Overlays & effects
+  bottomBanner Json  // BottomBanner
+  qrCode    Json     // QRCode
+  music     Json     // Music
+  voice     Json     // Voice
+  endScreen Json     // EndScreen
+  
+  // Metadata
+  status    String   // 'draft' | 'rendering-preview' | 'preview-ready' | 'rendering-final' | 'final-ready' | 'error'
+  previewVideoUrl String?
+  finalVideoUrl   String?
+  lastPreviewConfigHash String?
+  lastPreviewRenderedAt DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([createdAt])
+  @@index([status])
+}
