@@ -37,7 +37,9 @@ import {
   ZoomOut,
   Clock,
   Keyboard,
+  Sparkles,
 } from "lucide-react";
+import StudioModalPlus from "./StudioModalPlus";
 import {
   Project,
   Slide,
@@ -92,6 +94,7 @@ export default function StudioModalV2({
   const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [isStudioPlusOpen, setIsStudioPlusOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const saveInProgressRef = useRef<Promise<void> | null>(null);
@@ -632,6 +635,19 @@ export default function StudioModalV2({
             <Keyboard className="w-4 h-4 text-gray-400" />
           </button>
 
+          <button
+            onClick={() => setIsStudioPlusOpen(true)}
+            className="group relative px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-lg font-semibold transition-all transform hover:scale-105 shadow-lg hover:shadow-purple-500/50"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4" />
+              <span className="text-sm">Studio Plus</span>
+              <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded-full">
+                PREMIUM
+              </span>
+            </div>
+          </button>
+
           <span className="text-sm text-gray-400">Personalize your Ads</span>
           <button
             onClick={onClose}
@@ -1119,6 +1135,12 @@ export default function StudioModalV2({
           </div>
         </div>
       )}
+
+      {/* Studio Plus Modal */}
+      <StudioModalPlus
+        isOpen={isStudioPlusOpen}
+        onClose={() => setIsStudioPlusOpen(false)}
+      />
 
       {/* Keyboard Shortcuts Modal */}
       {showKeyboardShortcuts && (
