@@ -28,7 +28,7 @@ async function getImageDimensions(url: string): Promise<{ width: number; height:
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
-      signal: AbortSignal.timeout(5000), // 5s timeout per image
+      signal: AbortSignal.timeout(3000), // 3s timeout per image (fail fast)
     });
 
     if (!response.ok) {
@@ -36,16 +36,39 @@ async function getImageDimensions(url: string): Promise<{ width: number; height:
       return null;
     }
 
-    const buffer = await response.arrayBuffer();
-    const metadata = await sharp(Buffer.from(buffer)).metadata();
+    // Check content-type to ensure it's an image
+    const contentType = response.headers.get('content-type');
+    if (contentType && !contentType.startsWith('image/')) {
+      console.warn(`[ImageSelector] Invalid content-type for ${url}: ${contentType}`);
+      return null;
+    }
 
-    if (metadata.width && metadata.height) {
-      return { width: metadata.width, height: metadata.height };
+    const buffer = await response.arrayBuffer();
+    
+    // Validate buffer size (minimum 100 bytes for valid image)
+    if (buffer.byteLength < 100) {
+      console.warn(`[ImageSelector] Buffer too small for ${url}: ${buffer.byteLength} bytes`);
+      return null;
+    }
+
+    try {
+      const metadata = await sharp(Buffer.from(buffer)).metadata();
+
+      if (metadata.width && metadata.height) {
+        return { width: metadata.width, height: metadata.height };
+      }
+    } catch (sharpError: any) {
+      console.warn(`[ImageSelector] Sharp error for ${url}: ${sharpError.message}`);
+      return null;
     }
 
     return null;
-  } catch (error) {
-    console.warn(`[ImageSelector] Error getting dimensions for ${url}:`, error);
+  } catch (error: any) {
+    // Silently skip failed images - this is expected for invalid URLs, timeouts, etc.
+    // Only log in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`[ImageSelector] Skipped ${url}: ${error.message}`);
+    }
     return null;
   }
 }
