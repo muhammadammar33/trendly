@@ -902,7 +902,7 @@ export default function StudioModalV2({
                                 "Regenerating video preview...",
                                 "info"
                               );
-                              handleGeneratePreview();
+                              handleRenderPreview();
                             }, 500);
                           }
                           break;
