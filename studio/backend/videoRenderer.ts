@@ -1115,6 +1115,13 @@ async function renderWithFFmpeg(
   args.push('-pix_fmt', 'yuv420p');
   args.push('-c:a', 'aac');
   args.push('-b:a', '128k');
+  args.push('-ar', '44100'); // Audio sample rate
+  
+  // Resource management to prevent "Resource temporarily unavailable" errors
+  args.push('-max_muxing_queue_size', '9999'); // Increase buffer size
+  args.push('-bufsize', '2000k'); // Increase buffer size
+  args.push('-filter_complex_threads', '1'); // Limit filter threads to reduce memory
+  
   // Disable expensive filters for faster encoding
   args.push('-tune', 'fastdecode');
   args.push('-threads', '0'); // Use all CPU cores
@@ -1192,7 +1199,18 @@ async function renderWithFFmpeg(
       } else {
         console.error(`[VideoRenderer] FFmpeg failed with code ${code}`);
         console.error('[VideoRenderer] Full stderr:', stderr);
-        reject(new Error(`FFmpeg exited with code ${code}. Check logs for details.`));
+        
+        // Check for specific error patterns and provide helpful messages
+        let errorHint = '';
+        if (stderr.includes('Resource temporarily unavailable')) {
+          errorHint = ' This appears to be a resource/memory issue. The server may need more RAM or the filter chain is too complex.';
+        } else if (stderr.includes('Failed to configure output pad')) {
+          errorHint = ' This is a filter configuration error. Check audio/video stream compatibility.';
+        } else if (stderr.includes('Error reinitializing filters')) {
+          errorHint = ' Filter reinitialization failed. This may be due to incompatible stream formats or resource limits.';
+        }
+        
+        reject(new Error(`FFmpeg exited with code ${code}. Check logs for details.${errorHint}`));
       }
     });
 
