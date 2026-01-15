@@ -152,9 +152,9 @@ export async function selectBest4ImagesFor16x9(
     } catch {
       return false;
     }
-  });
+  }).slice(0, 50); // Limit to top 50 valid images to reduce processing time
 
-  console.log(`[ImageSelector] ${validImages.length} valid images after filtering`);
+  console.log(`[ImageSelector] ${validImages.length} valid images after filtering (limited to 50)`);
 
   if (validImages.length === 0) {
     throw new Error('No valid images found for selection');

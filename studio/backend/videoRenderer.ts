@@ -344,37 +344,53 @@ async function downloadImages(slides: any[], outputDir: string): Promise<void> {
       console.log(`[VideoRenderer] Created directory: ${dir}`);
     }
     
-    await downloadFile(slide.imageUrl, tempPath);
-    
-    // Convert to JPG using Sharp (handles webp, png, etc.)
-    console.log(`[VideoRenderer] Converting slide ${index} to JPG...`);
-    await sharp(tempPath)
-      .jpeg({ quality: 95 })
-      .toFile(filePath);
-    
-    // Remove temp file (with retry for Windows file locks)
-    if (fs.existsSync(tempPath)) {
-      let retries = 3;
-      while (retries > 0) {
-        try {
-          fs.unlinkSync(tempPath);
-          console.log(`[VideoRenderer] Cleaned up temp file: ${tempPath}`);
-          break;
-        } catch (unlinkError: any) {
-          if ((unlinkError.code === 'EBUSY' || unlinkError.code === 'EPERM') && retries > 1) {
-            console.log(`[VideoRenderer] Temp file locked, retrying... (${retries - 1} attempts left)`);
-            await new Promise(resolve => setTimeout(resolve, 200)); // Wait 200ms
-            retries--;
-          } else {
-            console.log(`[VideoRenderer] Could not delete temp file (${unlinkError.code}), will be cleaned up later`);
+    try {
+      await downloadFile(slide.imageUrl, tempPath);
+      
+      // Convert to JPG using Sharp (handles webp, png, etc.)
+      console.log(`[VideoRenderer] Converting slide ${index} to JPG...`);
+      await sharp(tempPath)
+        .jpeg({ quality: 95 })
+        .toFile(filePath);
+      
+      // Remove temp file (with retry for Windows file locks)
+      if (fs.existsSync(tempPath)) {
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            fs.unlinkSync(tempPath);
+            console.log(`[VideoRenderer] Cleaned up temp file: ${tempPath}`);
             break;
+          } catch (unlinkError: any) {
+            if ((unlinkError.code === 'EBUSY' || unlinkError.code === 'EPERM') && retries > 1) {
+              console.log(`[VideoRenderer] Temp file locked, retrying... (${retries - 1} attempts left)`);
+              await new Promise(resolve => setTimeout(resolve, 200)); // Wait 200ms
+              retries--;
+            } else {
+              console.log(`[VideoRenderer] Could not delete temp file (${unlinkError.code}), will be cleaned up later`);
+              break;
+            }
           }
         }
       }
+      
+      console.log(`[VideoRenderer] ✓ Downloaded and converted slide ${index}`);
+      return filePath;
+    } catch (downloadError: any) {
+      console.warn(`[VideoRenderer] ⚠ Failed to download slide ${index}, creating placeholder: ${downloadError.message}`);
+      
+      // Clean up temp file if it exists
+      if (fs.existsSync(tempPath)) {
+        try {
+          fs.unlinkSync(tempPath);
+        } catch {}
+      }
+      
+      // Create a placeholder image instead of crashing the entire video
+      await createPlaceholderImage(filePath, 1920, 1080, index);
+      console.log(`[VideoRenderer] ✓ Created placeholder for slide ${index}`);
+      return filePath;
     }
-    
-    console.log(`[VideoRenderer] ✓ Downloaded and converted slide ${index}`);
-    return filePath;
   }
 
   try {
@@ -451,6 +467,64 @@ async function createBlankImage(outputPath: string, width: number, height: numbe
     console.error(`[VideoRenderer] Error message:`, err instanceof Error ? err.message : String(err));
     console.error(`[VideoRenderer] Error stack:`, err instanceof Error ? err.stack : 'No stack');
     throw new Error(`Failed to create blank image: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * Create placeholder image for failed downloads
+ */
+async function createPlaceholderImage(outputPath: string, width: number, height: number, slideIndex: number): Promise<void> {
+  console.log(`[VideoRenderer] Creating placeholder image: ${outputPath} (${width}x${height})`);
+  
+  try {
+    const createImagePromise = (async () => {
+      // Create SVG with error message
+      const svgText = `
+        <svg width="${width}" height="${height}">
+          <defs>
+            <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#2c3e50;stop-opacity:1" />
+              <stop offset="100%" style="stop-color:#34495e;stop-opacity:1" />
+            </linearGradient>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#grad1)"/>
+          <text x="50%" y="45%" 
+                font-family="Arial, sans-serif" 
+                font-size="72" 
+                font-weight="bold" 
+                fill="white" 
+                text-anchor="middle" 
+                dominant-baseline="middle">
+            Image Unavailable
+          </text>
+          <text x="50%" y="55%" 
+                font-family="Arial, sans-serif" 
+                font-size="36" 
+                fill="rgba(255,255,255,0.7)" 
+                text-anchor="middle" 
+                dominant-baseline="middle">
+            Slide ${slideIndex + 1}
+          </text>
+        </svg>
+      `;
+      
+      await sharp(Buffer.from(svgText))
+        .jpeg({ quality: 90 })
+        .toFile(outputPath);
+      
+      console.log(`[VideoRenderer] ✓ Placeholder image created successfully`);
+    })();
+    
+    // Add 10-second timeout
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Sharp placeholder creation timed out after 10 seconds')), 10000);
+    });
+    
+    await Promise.race([createImagePromise, timeoutPromise]);
+    
+  } catch (err) {
+    console.error(`[VideoRenderer] createPlaceholderImage ERROR:`, err);
+    throw new Error(`Failed to create placeholder image: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

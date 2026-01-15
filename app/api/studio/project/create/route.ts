@@ -8,6 +8,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createProject } from '@/studio/projectStore';
 import { CreateProjectRequest } from '@/studio/types';
 
+// Ensure dynamic rendering for API routes
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 export async function POST(request: NextRequest) {
   try {
     const body: CreateProjectRequest = await request.json();

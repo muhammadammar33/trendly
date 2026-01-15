@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "VIBE STUDIO - AI TV Ad Generator",
+  title: "TRENDLY STUDIO - AI TV Ad Generator",
   description:
     "Turn your business into a TV ad instantly. Video ready in less than 30 seconds, 100% free.",
 };

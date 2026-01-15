@@ -8,6 +8,7 @@ import { extractColors } from './colors';
 import {
   scoreImage,
   filterImage,
+  isValidImageUrl,
   parseSrcSet,
   deduplicateImages,
   sortImagesByScore,
@@ -44,6 +45,7 @@ export async function parseStaticHtml(options: ParseOptions): Promise<Partial<Sc
 
   const dedupedImages = deduplicateImages(images);
   const sortedImages = sortImagesByScore(dedupedImages);
+  const limitedImages = sortedImages.slice(0, 50); // Limit to top 50 images
 
   return {
     status: 'ok',
@@ -52,15 +54,16 @@ export async function parseStaticHtml(options: ParseOptions): Promise<Partial<Sc
     fetchedAt: new Date().toISOString(),
     business,
     brand,
-    images: sortedImages,
+    images: limitedImages,
     debug: {
       methodUsed: 'static',
       timingsMs,
       notes: [
         `Parsed ${images.length} raw images`,
         `After deduplication: ${dedupedImages.length} unique images`,
-        `Image types found: ${Array.from(new Set(images.map(i => i.typeGuess))).join(', ')}`,
-        `Top 5 scores: ${sortedImages.slice(0, 5).map(i => `${i.typeGuess}(${i.score})`).join(', ')}`,
+        `Limited to top ${limitedImages.length} images`,
+        `Image types found: ${Array.from(new Set(limitedImages.map(i => i.typeGuess))).join(', ')}`,
+        `Top 5 scores: ${limitedImages.slice(0, 5).map(i => `${i.typeGuess}(${i.score})`).join(', ')}`,
         `Found ${business.emails.length} emails`,
       ],
     },
@@ -105,6 +108,7 @@ export async function parseMultiplePages(
   const aggregatedImages = aggregateImagesFromPages(allPagesImages, pageUrls, firstPage.url);
   const dedupedImages = deduplicateImages(aggregatedImages);
   const sortedImages = sortImagesByScore(dedupedImages);
+  const limitedImages = sortedImages.slice(0, 50); // Limit to top 50 images
 
   const totalRawImages = allPagesImages.reduce((sum, imgs) => sum + imgs.length, 0);
 
@@ -128,7 +132,7 @@ export async function parseMultiplePages(
     fetchedAt: new Date().toISOString(),
     business,
     brand,
-    images: sortedImages,
+    images: limitedImages,
     crawlStats: finalCrawlStats,
     debug: {
       methodUsed: 'static',
@@ -138,8 +142,9 @@ export async function parseMultiplePages(
         `Found ${totalRawImages} raw images across all pages`,
         `After aggregation: ${aggregatedImages.length} images`,
         `After deduplication: ${dedupedImages.length} unique images`,
-        `Image types found: ${Array.from(new Set(sortedImages.map(i => i.typeGuess))).join(', ')}`,
-        `Top 5 scores: ${sortedImages.slice(0, 5).map(i => `${i.typeGuess}(${i.score})`).join(', ')}`,
+        `Limited to top ${limitedImages.length} images`,
+        `Image types found: ${Array.from(new Set(limitedImages.map(i => i.typeGuess))).join(', ')}`,
+        `Top 5 scores: ${limitedImages.slice(0, 5).map(i => `${i.typeGuess}(${i.score})`).join(', ')}`,
         `Found ${business.emails.length} emails`,
       ],
     },
@@ -554,134 +559,113 @@ function findLogoInSchema(json: any): string | null {
  */
 async function extractImages($: cheerio.CheerioAPI, baseUrl: string): Promise<ImageCandidate[]> {
   const images: ImageCandidate[] = [];
+  const MAX_IMAGES = 50; // Limit to 50 images max to avoid unnecessary processing
 
-  // 1. Standard img tags (including lazy-loaded)
-  $('img').each((_, elem) => {
-    const alt = $(elem).attr('alt') || '';
-    const className = $(elem).attr('class') || '';
-    
-    // Check all possible image source attributes
-    const sources = [
-      $(elem).attr('src'),
-      $(elem).attr('data-src'),
-      $(elem).attr('data-lazy-src'),
-      $(elem).attr('data-original'),
-      $(elem).attr('data-lazy'),
-      $(elem).attr('data-srcset')?.split(',')[0]?.trim().split(' ')[0],
-    ].filter(Boolean);
-
-    sources.forEach((src) => {
-      if (src && src.trim().length > 0) {
-        const normalized = normalizeUrl(src.trim(), baseUrl);
-        if (normalized && normalized.length > 0 && filterImage(normalized)) {
-          images.push(scoreImage(normalized, 'img', alt, className, baseUrl));
-        }
-      }
-    });
-
-    // Check srcset for higher resolution variants
-    const srcset = $(elem).attr('srcset') || $(elem).attr('data-srcset');
-    if (srcset) {
-      const srcsetUrls = parseSrcSet(srcset, baseUrl);
-      srcsetUrls.forEach((url) => {
-        if (url && url.length > 0) {
-          images.push(scoreImage(url, 'srcset', alt, className, baseUrl));
-        }
-      });
-    }
-  });
-
-  // 2. Picture elements (modern responsive images)
-  $('picture source').each((_, elem) => {
-    const srcset = $(elem).attr('srcset');
-    if (srcset) {
-      const srcsetUrls = parseSrcSet(srcset, baseUrl);
-      srcsetUrls.forEach((url) => {
-        images.push(scoreImage(url, 'srcset', '', 'picture', baseUrl));
-      });
-    }
-  });
-
-  // 3. All Open Graph images (og:image, og:image:secure_url, etc.)
+  // 1. All Open Graph images (og:image, og:image:secure_url, etc.) - HIGHEST PRIORITY
   $('meta[property^="og:image"]').each((_, elem) => {
     const content = $(elem).attr('content');
     if (content) {
       const normalized = normalizeUrl(content, baseUrl);
-      if (normalized && filterImage(normalized)) {
+      if (normalized && filterImage(normalized) && isValidImageUrl(normalized)) {
         images.push(scoreImage(normalized, 'og', '', '', baseUrl));
       }
     }
   });
 
-  // 4. Twitter Card images (all variants)
+  // 2. Twitter Card images (all variants) - HIGH PRIORITY
   $('meta[name^="twitter:image"]').each((_, elem) => {
     const content = $(elem).attr('content');
     if (content) {
       const normalized = normalizeUrl(content, baseUrl);
-      if (normalized && filterImage(normalized)) {
+      if (normalized && filterImage(normalized) && isValidImageUrl(normalized)) {
         images.push(scoreImage(normalized, 'twitter', '', '', baseUrl));
       }
     }
   });
 
-  // 5. Schema.org images
+  // 3. Schema.org images - HIGH PRIORITY
   $('meta[itemprop="image"]').each((_, elem) => {
     const content = $(elem).attr('content');
     if (content) {
       const normalized = normalizeUrl(content, baseUrl);
-      if (normalized && filterImage(normalized)) {
+      if (normalized && filterImage(normalized) && isValidImageUrl(normalized)) {
         images.push(scoreImage(normalized, 'og', '', '', baseUrl));
       }
     }
   });
 
-  // 6. Icons (but with lower priority)
-  $('link[rel="icon"], link[rel="apple-touch-icon"], link[rel="shortcut icon"]').each((_, elem) => {
-    const href = $(elem).attr('href') || '';
-    const normalized = normalizeUrl(href, baseUrl);
-    if (normalized && filterImage(normalized)) {
-      images.push(scoreImage(normalized, 'icon', '', '', baseUrl));
-    }
-  });
-
-  // 7. Background images in inline styles (enhanced)
-  $('[style*="background"]').each((_, elem) => {
-    const style = $(elem).attr('style') || '';
-    // Match multiple url() patterns
-    const urlMatches = style.matchAll(/url\(['"]?([^'"()]+)['"]?\)/g);
-    for (const match of urlMatches) {
-      const normalized = normalizeUrl(match[1], baseUrl);
-      if (normalized && filterImage(normalized)) {
-        const className = $(elem).attr('class') || '';
-        images.push(scoreImage(normalized, 'css', '', className, baseUrl));
-      }
-    }
-  });
-
-  // 8. Divs with data-bg or data-background attributes (common in modern sites)
-  $('[data-bg], [data-background], [data-background-image]').each((_, elem) => {
-    const bg = $(elem).attr('data-bg') || $(elem).attr('data-background') || $(elem).attr('data-background-image');
-    if (bg) {
-      const normalized = normalizeUrl(bg, baseUrl);
-      if (normalized && filterImage(normalized)) {
-        const className = $(elem).attr('class') || '';
-        images.push(scoreImage(normalized, 'css', '', className, baseUrl));
-      }
-    }
-  });
-
-  // 9. WordPress featured images and thumbnails
+  // 4. WordPress featured images and thumbnails - HIGH PRIORITY
   $('img.wp-post-image, img.attachment-thumbnail, img[class*="featured"]').each((_, elem) => {
+    if (images.length >= MAX_IMAGES) return false; // Stop early
     const src = $(elem).attr('src') || $(elem).attr('data-src');
     if (src) {
       const normalized = normalizeUrl(src, baseUrl);
       const alt = $(elem).attr('alt') || '';
-      if (normalized && filterImage(normalized)) {
+      if (normalized && filterImage(normalized) && isValidImageUrl(normalized)) {
         images.push(scoreImage(normalized, 'img', alt, 'featured', baseUrl));
       }
     }
   });
 
-  console.log(`[ExtractImages] Found ${images.length} total images from various sources`);
+  // 5. Picture elements (modern responsive images)
+  $('picture source').each((_, elem) => {
+    if (images.length >= MAX_IMAGES) return false; // Stop early
+    const srcset = $(elem).attr('srcset');
+    if (srcset) {
+      const srcsetUrls = parseSrcSet(srcset, baseUrl);
+      srcsetUrls.forEach((url) => {
+        if (images.length < MAX_IMAGES && isValidImageUrl(url)) {
+          images.push(scoreImage(url, 'srcset', '', 'picture', baseUrl));
+        }
+      });
+    }
+  });
+
+  // 6. Standard img tags (including lazy-loaded) - but only if we need more
+  if (images.length < MAX_IMAGES) {
+    $('img').each((_, elem) => {
+      if (images.length >= MAX_IMAGES) return false; // Stop early
+      
+      const alt = $(elem).attr('alt') || '';
+      const className = $(elem).attr('class') || '';
+      
+      // Check all possible image source attributes
+      const sources = [
+        $(elem).attr('src'),
+        $(elem).attr('data-src'),
+        $(elem).attr('data-lazy-src'),
+        $(elem).attr('data-original'),
+        $(elem).attr('data-lazy'),
+        $(elem).attr('data-srcset')?.split(',')[0]?.trim().split(' ')[0],
+      ].filter(Boolean);
+
+      sources.forEach((src) => {
+        if (src && src.trim().length > 0 && images.length < MAX_IMAGES) {
+          const normalized = normalizeUrl(src.trim(), baseUrl);
+          if (normalized && normalized.length > 0 && filterImage(normalized) && isValidImageUrl(normalized)) {
+            images.push(scoreImage(normalized, 'img', alt, className, baseUrl));
+          }
+        }
+      });
+
+      // Check srcset for higher resolution variants
+      if (images.length < MAX_IMAGES) {
+        const srcset = $(elem).attr('srcset') || $(elem).attr('data-srcset');
+        if (srcset) {
+          const srcsetUrls = parseSrcSet(srcset, baseUrl);
+          srcsetUrls.forEach((url) => {
+            if (url && url.length > 0 && images.length < MAX_IMAGES && isValidImageUrl(url)) {
+              images.push(scoreImage(url, 'srcset', alt, className, baseUrl));
+            }
+          });
+        }
+      }
+    });
+  }
+
+  // Skip icons and CSS background images - we don't need them for video generation
+  // This saves processing time and avoids unnecessary conversions
+
+  console.log(`[ExtractImages] Found ${images.length} total images from primary sources (limited to ${MAX_IMAGES})`);
   return images;
 }

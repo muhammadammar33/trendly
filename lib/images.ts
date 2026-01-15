@@ -13,6 +13,53 @@ export interface ImageCandidate {
 }
 
 /**
+ * Validate if a URL is likely to be a valid image URL
+ */
+export function isValidImageUrl(url: string): boolean {
+  if (!url || url.length === 0) return false;
+  
+  try {
+    // Must be a valid URL
+    const parsed = new URL(url);
+    
+    // Must be http or https
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return false;
+    }
+    
+    // Check the pathname
+    const pathname = parsed.pathname.toLowerCase();
+    
+    // Reject malformed CDN URLs with transformation parameters in the middle of the path
+    // e.g., /path/c_fill/v12345/image.jpg or /path/c_scale/image.jpg
+    const hasMalformedCDNPath = /\/(c_fill|c_scale|c_fit|c_crop|c_thumb|c_pad|w_\d+|h_\d+|q_\d+|f_auto|dpr_\d+)\//i.test(pathname);
+    if (hasMalformedCDNPath) {
+      console.warn(`[ImageValidator] Rejected malformed CDN URL: ${url}`);
+      return false;
+    }
+    
+    // Reject URLs with multiple transformation parameters scattered in path
+    // These are often incorrectly parsed from data attributes or CSS
+    const transformCount = (pathname.match(/\/(c_|w_|h_|q_|f_|dpr_|ar_|g_|x_|y_)/gi) || []).length;
+    if (transformCount > 0) {
+      console.warn(`[ImageValidator] Rejected URL with transformation params in path: ${url}`);
+      return false;
+    }
+    
+    // Must have a valid image extension or be from a known CDN/image service
+    const hasExtension = /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif|ico)$/i.test(pathname);
+    const hasImageParam = /[?&](format|ext|fm)=(jpg|jpeg|png|gif|webp|bmp|svg|avif)/i.test(url);
+    const isImagePath = /\/(image|img|photo|picture|media|gallery|upload|cdn|static|assets)\//i.test(pathname);
+    
+    // Valid if it has extension, image params, or is from an image path
+    return hasExtension || hasImageParam || isImagePath;
+  } catch {
+    // Invalid URL format
+    return false;
+  }
+}
+
+/**
  * Score and rank images by their usefulness for video generation
  */
 export function scoreImage(
@@ -163,6 +210,24 @@ export function filterImage(url: string): boolean {
   // Filter data URIs unless they're reasonable size (might be quality logos)
   if (url.startsWith('data:')) {
     return url.length < 5000; // Allow larger data URIs for quality logos
+  }
+
+  // Validate URL has proper image extension or is a valid image endpoint
+  // Remove query params and fragments to check the base path
+  const urlWithoutParams = url.split('?')[0].split('#')[0];
+  const hasValidExtension = /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif|ico)$/i.test(urlWithoutParams);
+  const hasImageParams = /[?&](format|ext|fm)=(jpg|jpeg|png|gif|webp|bmp|svg|avif)/i.test(url);
+  
+  // Must have either a valid extension OR image format parameters (for CDN URLs)
+  // Also allow URLs that contain common image path indicators
+  const looksLikeImage = hasValidExtension || 
+                         hasImageParams || 
+                         /\/(image|img|photo|picture|media|gallery|upload|cdn|static)\/.*\.(jpg|jpeg|png|gif|webp)/i.test(urlLower);
+  
+  if (!looksLikeImage) {
+    // Filter out incomplete/invalid URLs like CDN transformation paths without extensions
+    // e.g., https://example.com/c_fill/image_name (missing extension)
+    return false;
   }
 
   // Filter common tracking/analytics pixels
