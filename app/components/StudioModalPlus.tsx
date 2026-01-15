@@ -1,10 +1,5 @@
 "use client";
 
-/**
- * Studio Modal Plus - Premium Video Composer
- * Combine multiple video clips and audio tracks into a final video
- */
-
 import { useEffect, useState, useRef } from "react";
 import {
   X,

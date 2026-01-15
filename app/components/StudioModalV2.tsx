@@ -328,14 +328,17 @@ export default function StudioModalV2({
     try {
       if (video.paused) {
         console.log("[togglePlay] Attempting to play...");
+        setIsPlaying(true); // Update state immediately
         await video.play();
         console.log("[togglePlay] Play successful");
       } else {
         console.log("[togglePlay] Pausing...");
+        setIsPlaying(false); // Update state immediately
         video.pause();
       }
     } catch (error) {
       console.error("[togglePlay] Playback error:", error);
+      setIsPlaying(false); // Reset state on error
       // Only show toast for non-abort errors
       if (error instanceof Error && error.name !== "AbortError") {
         showToast("Failed to play video", "error");
@@ -601,7 +604,7 @@ export default function StudioModalV2({
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [isOpen, showKeyboardShortcuts]);
 
-  // Video time update
+  // Video event listeners - separate from settings to prevent interruption
   useEffect(() => {
     const video = videoRef.current;
     if (!video) {
@@ -615,12 +618,6 @@ export default function StudioModalV2({
     );
 
     const handleTimeUpdate = () => {
-      console.log(
-        "[Video] Time update:",
-        video.currentTime,
-        "/",
-        video.duration
-      );
       setCurrentTime(video.currentTime);
     };
     const handleLoadedMetadata = () => {
@@ -678,13 +675,10 @@ export default function StudioModalV2({
     video.addEventListener("ended", handleEnded);
     video.addEventListener("error", handleError);
 
-    // Set initial values
+    // Set initial duration if already loaded
     if (video.duration && !isNaN(video.duration)) {
       setDuration(video.duration);
     }
-    video.volume = volume / 100;
-    video.playbackRate = playbackSpeed;
-    video.muted = isMuted;
 
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
@@ -694,7 +688,17 @@ export default function StudioModalV2({
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("error", handleError);
     };
-  }, [project?.previewVideoUrl, volume, playbackSpeed, isMuted]);
+  }, [project?.previewVideoUrl]);
+
+  // Update video settings separately to avoid removing event listeners
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.volume = volume / 100;
+    video.playbackRate = playbackSpeed;
+    video.muted = isMuted;
+  }, [volume, playbackSpeed, isMuted]);
 
   if (!isOpen) return null;
 
