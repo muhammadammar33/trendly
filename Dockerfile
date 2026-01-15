@@ -54,7 +54,7 @@ EXPOSE 8080
 # Set environment variables
 ENV PORT=8080
 ENV NODE_ENV=production
-ENV NODE_OPTIONS="--max-old-space-size=2048"
+ENV NODE_OPTIONS="--max-old-space-size=24576"
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin/chromium
 
