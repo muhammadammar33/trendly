@@ -16,6 +16,7 @@ import { buildInputList, calculateDuration, validateTimeline, normalizeTimeline,
 import { generateBannerFilter, generateQRFilter, generateEndScreenFilter } from './overlayRenderer';
 import { generateTTS, buildAudioFilter } from './audioMixer';
 import { generateQRCode } from './qrGenerator';
+import { verifyFFmpeg } from '@/lib/ffmpegCheck';
 
 /**
  * Sanitize text for FFmpeg drawtext filter
@@ -95,6 +96,13 @@ export async function renderVideo(config: RenderConfig): Promise<void> {
   console.log(`[VideoRenderer] ===== RENDER START (${resolution}) =====`);
   console.log(`[VideoRenderer] Project ID: ${project.projectId}`);
   console.log(`[VideoRenderer] Slides count: ${project.slides.length}`);
+
+  // Verify FFmpeg installation
+  const ffmpegCheck = verifyFFmpeg();
+  if (!ffmpegCheck.installed) {
+    throw new Error(`FFmpeg is not installed: ${ffmpegCheck.error}. Video rendering requires FFmpeg. Please install it on your server.`);
+  }
+  console.log(`[VideoRenderer] FFmpeg verified: ${ffmpegCheck.version}`);
 
   try {
     // Use project.slides directly (already includes end screen from projectStore)
@@ -1119,7 +1127,15 @@ async function renderWithFFmpeg(
 
   // Execute FFmpeg
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', args);
+    let ffmpeg;
+    
+    try {
+      ffmpeg = spawn('ffmpeg', args);
+    } catch (spawnError: any) {
+      console.error('[VideoRenderer] FFmpeg spawn error:', spawnError);
+      reject(new Error(`Failed to start FFmpeg: ${spawnError.message}. Ensure FFmpeg is installed and in PATH.`));
+      return;
+    }
 
     let stderr = '';
     let lastProgress = -1;
